@@ -35,12 +35,72 @@ function diagnoseUrl(url, loggedIn) {
 /** 把选择器数组塞进页面里用的字符串字面量。 */
 const lit = (v) => JSON.stringify(v || []);
 
+// ---------------------------------------------------------------- 一键投递选择器
+// 「立即沟通」入口。BOSS 改过好几次 class，所以按新版在前、老版后排，
+// 全都没命中时还会退一步按可见文案找（站方改 class 的概率远高于改文案）。
+const STARTCHAT_SELECTORS = [
+  'a.btn-startchat',
+  '.job-banner-con a.btn-startchat',
+  '.btn-container a.btn-startchat',
+  'button.btn-startchat',
+  '.job-op a.btn-startchat',
+  'a.op-btn-chat',
+  '.op-btn-chat',
+  "a[ka*='job-detail-chat']",
+];
+
+// 聊天输入框：BOSS 用的是 div[contenteditable]
+const CHAT_INPUT_SELECTORS = [
+  '#chat-input',
+  '.chat-input[contenteditable="true"]',
+  'div[contenteditable="true"]',
+  'textarea.input-area',
+  'textarea',
+];
+
+const SEND_SELECTORS = [
+  '.send-message',
+  'button.btn-send',
+  '.chat-op .btn-send',
+  '.chat-input-area .btn-send',
+];
+
+/** 风控/登录页判定：投递时撞上不能硬闯，否则只会加速封号。 */
+const SECURITY_RE = /security\.html|\/web\/passport|\/web\/user\/|captcha|verify/i;
+const SECURITY_TEXT_RE = /请稍候|安全验证|滑动验证|请完成验证|拖动滑块|扫码登录/;
+
+// ---------------------------------------------------------------- JD 正文兜底
+// 平台配置里那几条选择器（div.job-sec-text 等）站方一改版就整批落空，
+// 实测过一次抓 60 条有 30 多条没正文 —— 全是「选择器还在、但正文没抓到」。
+// 所以这里按「容器语义 + 整页文本关键词」再兜两层，尽量一次就抓到。
+const JD_EXTRA_SELECTORS = [
+  '.job-detail-section',
+  '.job-sec-text',
+  '.job-detail-content',
+  '.job-detail',
+  '.detail-content',
+  '[class*="job-sec"]',
+  '[class*="job-detail"]',
+  '[class*="job-desc"]',
+  '.job-description',
+  '.desc',
+];
+
+// 正文段的起点/终点：从「岗位职责」起，到「公司介绍 / 工作地址」止。
+// 只在选择器全落空时才用，属于最后的兜底，抓到的是整段纯文本。
+const JD_START_RE = /(岗位职责|工作职责|职位描述|职位职责|工作内容|岗位描述|职位要求|任职要求|任职资格|工作职责：)/;
+const JD_END_RE = /(公司介绍|公司简介|工商信息|工作地址|上班地址|企业信息|竞争力分析|相似职位|举报|投诉)/;
+
 class BrowserAgent {
   /**
    * @param {(payload: {taskId?: string, level: string, msg: string}) => void} onLog
+   * @param {(payload: {taskId?: string, job_id?: string, ok?: boolean, note?: string}) => void} onResult
+   *        投递的单条结果回调：每投完一条就报一次，前端立刻写库，
+   *        这样中途崩了也不会丢掉前面已经投出去的那些。
    */
-  constructor(onLog) {
+  constructor(onLog, onResult) {
     this.onLog = onLog || (() => {});
+    this.onResult = onResult || (() => {});
     this.windows = new Map(); // source -> BrowserWindow（登录与抓取共用）
     this.tasks = new Map(); // taskId -> { cancelled: boolean }
     this.busy = new Set(); // 正在抓取的 source
@@ -429,24 +489,56 @@ class BrowserAgent {
     return false;
   }
 
-  /** 在详情页抽取 JD 文本 + 经验/学历要求。 */
+  /**
+   * 在详情页抽取 JD 文本 + 经验/学历要求。
+   *
+   * 三层取法，越往后越粗糙，但总比空着强：
+   *   1. 平台配置的选择器（准确）
+   *   2. 通用容器选择器 JD_EXTRA_SELECTORS（站方改版后仍大概率命中）
+   *   3. 整页文本里从「岗位职责」截到「公司介绍」（兜底）
+   * 每层都取「文本最长的那个节点」——同一个 class 在详情页常出现多次，
+   * 第一次命中的往往是被折叠的小标题，正文在另一个节点里。
+   */
   async extractDetail(win, sel) {
     return win.webContents
       .executeJavaScript(
         `(() => {
-          const pickText = (sels) => {
+          const textOf = (el) => (el && (el.innerText || el.textContent || '').trim()) || '';
+          const pickLongest = (sels) => {
+            let best = '';
             for (const s of sels) {
-              const el = document.querySelector(s);
-              if (el) { const t = (el.innerText || '').trim(); if (t) return t; }
+              let els = [];
+              try { els = document.querySelectorAll(s); } catch { continue; }
+              for (const el of els) {
+                const t = textOf(el);
+                if (t.length > best.length) best = t;
+              }
             }
-            return '';
+            return best;
           };
           const bits = Array.from(document.querySelectorAll(${lit(sel.experience)}.concat(${lit(sel.education)}).join(',')))
-            .map((e) => (e.innerText || '').trim()).filter(Boolean);
-          return { jd: pickText(${lit(sel.jd)}), bits };
+            .map((e) => textOf(e)).filter(Boolean);
+
+          let jd = pickLongest(${lit(sel.jd)});
+          let from = jd.length >= 60 ? 'selector' : '';
+          if (jd.length < 60) {
+            const alt = pickLongest(${lit(JD_EXTRA_SELECTORS)});
+            if (alt.length > jd.length) { jd = alt; from = 'extra-selector'; }
+          }
+          if (jd.length < 60) {
+            const body = textOf(document.body);
+            const s = body.search(${JD_START_RE});
+            if (s >= 0) {
+              let tail = body.slice(s);
+              const e = tail.slice(40).search(${JD_END_RE});
+              if (e > 40) tail = tail.slice(0, e + 40);
+              if (tail.trim().length >= 60) { jd = tail; from = 'body-text'; }
+            }
+          }
+          return { jd: jd.slice(0, 12000), bits, from };
         })()`
       )
-      .catch(() => ({ jd: '', bits: [] }));
+      .catch(() => ({ jd: '', bits: [], from: '' }));
   }
 
   makeJobId(source, href) {
@@ -652,7 +744,7 @@ class BrowserAgent {
         try {
           await detailWin.webContents.loadURL(job.url);
           // 固定 sleep 抓不到正文（SPA 渲染慢），改成等 JD 容器真出文字
-          await this.waitForText(detailWin, sel.jd || [], 10000);
+          await this.waitForText(detailWin, (sel.jd || []).concat(JD_EXTRA_SELECTORS), 15000);
           const d = await this.extractDetail(detailWin, sel);
           job.jd_text = d.jd || '';
           for (const bit of d.bits || []) {
@@ -687,6 +779,100 @@ class BrowserAgent {
     }
   }
 
+  /**
+   * 补抓 JD 正文。
+   *
+   * 场景：早先抓取时详情页没渲染出来，库里存了岗位和链接、JD 是空的。
+   * 这种岗位写不出「对着要求」的招呼语，删了又可惜 —— 一键投递前先拿它的
+   * 原链接重新进一次详情页，把正文补回来。
+   *
+   * 与抓取的区别：不打列表页、不翻页，只按给定链接逐条取正文，所以很快。
+   */
+  async fetchJd({ source, spec = {}, items = [], taskId } = {}) {
+    const label = spec.name || source || '平台';
+    if (this.busy.has(source)) {
+      throw new Error(`${label} 正在忙（抓取或投递中），等当前任务结束再补 JD`);
+    }
+    const id = taskId || `jd-${Date.now()}`;
+    const want = (items || []).filter((i) => i && i.url);
+    if (!want.length) return { ok: true, jobs: [], got: 0, asked: 0, error: '' };
+
+    this.busy.add(source);
+    this.tasks.set(id, { cancelled: false });
+    const out = [];
+    const sel = spec.selectors || {};
+
+    try {
+      if (!(await this.hasLogin(source, spec.cookie_hints || []))) {
+        throw new Error(`还没有登录 ${label}，先在「抓取」页扫码登录，再回来补 JD`);
+      }
+      const win = this.ensureWindow(source, { title: `${label} · 补抓 JD`, mode: 'background' });
+      this.log(id, 'info', `${want.length} 条没抓到 JD 正文，先去原岗位页补回来…`);
+
+      for (let i = 0; i < want.length; i += 1) {
+        const stop = this.isCancelRequested(id, source);
+        if (stop) {
+          this.log(id, 'warn', stop === 'closed' ? '窗口被关掉，补 JD 中止' : '已取消补 JD');
+          break;
+        }
+        const it = want[i];
+        const title = it.title || it.job_id;
+        let ok = false;
+        try {
+          await win.webContents.loadURL(it.url);
+          await sleep(900);
+          let st = await this.applyPageState(win);
+          if (st.security) {
+            for (let k = 0; k < 3; k += 1) {
+              await sleep(1500);
+              st = await this.applyPageState(win);
+              if (!st.security) break;
+            }
+            if (st.security) {
+              this.log(id, 'error', `${title} · 撞到安全验证，补 JD 停下。在窗口里手动过一次再试`);
+              out.push({ job_id: it.job_id, jd_text: '', ok: false });
+              break;
+            }
+          }
+          if (st.needLogin) {
+            this.log(id, 'error', `${label} 登录态失效，补 JD 停下，请重新扫码登录`);
+            out.push({ job_id: it.job_id, jd_text: '', ok: false });
+            break;
+          }
+          await this.waitForText(win, (sel.jd || []).concat(JD_EXTRA_SELECTORS), 15000);
+          const d = await this.extractDetail(win, sel);
+          const jd = String(d.jd || '').trim();
+          if (jd.length >= 20) {
+            ok = true;
+            const exp = (d.bits || []).find((b) => /年|经验不限/.test(b)) || '';
+            const edu = (d.bits || []).find((b) => /本科|大专|硕士|博士|学历不限/.test(b)) || '';
+            this.log(id, 'ok', `[${i + 1}/${want.length}] ${title} · JD 补到 ${jd.length} 字`);
+            out.push({ job_id: it.job_id, jd_text: jd, experience_req: exp, education_req: edu, ok: true });
+          } else {
+            this.log(id, 'warn', `[${i + 1}/${want.length}] ${title} · 还是没正文，这条跳过`);
+            out.push({ job_id: it.job_id, jd_text: '', ok: false });
+          }
+        } catch (e) {
+          this.log(id, 'warn', `[${i + 1}/${want.length}] ${title} · 补 JD 失败：${String(e.message || e).slice(0, 80)}`);
+          out.push({ job_id: it.job_id, jd_text: '', ok: false });
+        }
+        if (!ok) {
+          // 失败立刻连着开下一条容易被风控，歇久一点
+          await sleep(1500 + Math.floor(Math.random() * 1200));
+        } else {
+          await sleep(600 + Math.floor(Math.random() * 700));
+        }
+      }
+
+      const got = out.filter((o) => o.ok).length;
+      this.log(id, got ? 'ok' : 'warn', `补 JD 结束：${got}/${want.length} 条拿到正文`);
+      return { ok: true, jobs: out, got, asked: want.length };
+    } finally {
+      this.busy.delete(source);
+      this.tasks.delete(id);
+    }
+  }
+
   async clickNext(win, selectors) {
     return win.webContents
       .executeJavaScript(
@@ -704,6 +890,376 @@ class BrowserAgent {
         })()`
       )
       .catch(() => false);
+  }
+
+  // ---------------------------------------------------------------- 一键投递
+  /**
+   * 看一眼当前页面是什么状态。
+   *
+   * 投递比抓取更怕风控：抓取失败只是没数据，投递失败可能被限制打招呼甚至封号。
+   * 所以每步都先确认页面状态，撞上验证页就停，不硬点。
+   */
+  async applyPageState(win) {
+    try {
+      return await win.webContents.executeJavaScript(`(() => {
+        const url = location.href || '';
+        const t = document.body ? document.body.innerText : '';
+        return {
+          url,
+          security: ${SECURITY_RE.toString()}.test(url) || ${SECURITY_TEXT_RE.toString()}.test(t),
+          needLogin: /立即登录|请先登录|登录后查看|扫码登录/.test(t),
+          textLen: t.length,
+          sample: t.replace(/\\s+/g, ' ').slice(0, 120),
+        };
+      })()`);
+    } catch {
+      return { url: '', security: false, needLogin: false, textLen: 0, sample: '' };
+    }
+  }
+
+  /** 点「立即沟通 / 继续沟通」。找不到时把页面上像按钮的候选吐出来，方便校准。 */
+  async clickStartChat(win) {
+    return win.webContents
+      .executeJavaScript(
+        `(() => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            if (r.width < 20 || r.height < 14) return false;
+            const st = getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) > 0.05;
+          };
+          for (const s of ${lit(STARTCHAT_SELECTORS)}) {
+            for (const el of document.querySelectorAll(s)) {
+              if (!visible(el)) continue;
+              const txt = (el.innerText || el.textContent || '').trim();
+              el.click();
+              return { ok: true, by: 'selector', sel: s, text: txt.slice(0, 12) };
+            }
+          }
+          // 文本兜底：只认真实按钮，避免点到外层容器没反应
+          const nodes = Array.from(document.querySelectorAll('a, button, span, div'));
+          for (const el of nodes) {
+            const t = (el.innerText || '').trim();
+            if (t !== '立即沟通' && t !== '继续沟通') continue;
+            if (!visible(el)) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width > 400 || r.height > 90) continue;
+            el.click();
+            return { ok: true, by: 'text', text: t };
+          }
+          const cand = nodes
+            .filter((el) => visible(el) && /沟通|聊一聊|投递|申请|打招呼/.test((el.innerText || '').slice(0, 8)))
+            .slice(0, 8)
+            .map((el) => ((el.innerText || '').trim().slice(0, 10)) + '|' + String(el.className || '').slice(0, 36));
+          return { ok: false, cand };
+        })()`
+      )
+      .catch((e) => ({ ok: false, error: String(e.message || e) }));
+  }
+
+  /** 找聊天输入框并聚焦，顺便把光标移到末尾。 */
+  async focusChatInput(win) {
+    return win.webContents
+      .executeJavaScript(
+        `(() => {
+          for (const s of ${lit(CHAT_INPUT_SELECTORS)}) {
+            for (const el of document.querySelectorAll(s)) {
+              const r = el.getBoundingClientRect();
+              if (r.width < 60 || r.height < 12) continue;
+              if (el.disabled || el.readOnly) continue;
+              try { el.focus(); } catch {}
+              try { el.click(); } catch {}
+              try {
+                const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                range.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(range);
+              } catch {}
+              return { ok: true, sel: s, tag: el.tagName.toLowerCase() };
+            }
+          }
+          return { ok: false };
+        })()`
+      )
+      .catch((e) => ({ ok: false, error: String(e.message || e) }));
+  }
+
+  /** 输入框里还剩多少字（用来判断是不是压根没发出去）。 */
+  async chatDraftLeft(win) {
+    return win.webContents
+      .executeJavaScript(
+        `(() => {
+          for (const s of ${lit(CHAT_INPUT_SELECTORS)}) {
+            for (const el of document.querySelectorAll(s)) {
+              const r = el.getBoundingClientRect();
+              if (r.width < 60 || r.height < 12) continue;
+              const v = el.isContentEditable ? (el.innerText || '') : (el.value || '');
+              return v.trim();
+            }
+          }
+          return '';
+        })()`
+      )
+      .catch(() => '');
+  }
+
+  /** 点发送。找不到按钮就返回 false，由调用方退化成回车。 */
+  async clickSend(win) {
+    return win.webContents
+      .executeJavaScript(
+        `(() => {
+          const area = (el) => {
+            const r = el.getBoundingClientRect();
+            return r.width >= 12 && r.height >= 12 && r.width <= 260;
+          };
+          for (const s of ${lit(SEND_SELECTORS)}) {
+            for (const el of document.querySelectorAll(s)) {
+              if (!area(el)) continue;
+              el.click();
+              return { ok: true, by: 'selector', sel: s };
+            }
+          }
+          for (const el of document.querySelectorAll('button, span, div, a')) {
+            const t = (el.innerText || '').trim();
+            if (t !== '发送') continue;
+            if (!area(el)) continue;
+            el.click();
+            return { ok: true, by: 'text' };
+          }
+          return { ok: false };
+        })()`
+      )
+      .catch(() => ({ ok: false }));
+  }
+
+  /** 消息是否已经出现在页面上（发出去的最硬证据）。 */
+  async pageHasText(win, probe) {
+    try {
+      return await win.webContents.executeJavaScript(
+        `(() => (document.body ? document.body.innerText : '').includes(${JSON.stringify(probe)}))()`
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /** 按「人打字的节奏」把话送进输入框：分小段插入，段间有停顿。 */
+  async typeLikeHuman(win, message) {
+    const chars = Array.from(String(message || ''));
+    let i = 0;
+    while (i < chars.length) {
+      const step = 2 + Math.floor(Math.random() * 4);
+      const chunk = chars.slice(i, i + step).join('');
+      i += step;
+      try {
+        win.webContents.insertText(chunk);
+      } catch {
+        return false;
+      }
+      await sleep(45 + Math.floor(Math.random() * 90));
+    }
+    return true;
+  }
+
+  /**
+   * 投一条：打开岗位 → 像人一样看两下 → 点立即沟通 → 填招呼语 → 发送 → 核对。
+   *
+   * 任何一步不符合预期都返回失败原因，不往前硬走。
+   */
+  async applyOne(win, task, taskId, name) {
+    const title = task.title || task.job_id || '';
+    const url = String(task.url || '').trim();
+    const message = String(task.message || '').trim();
+
+    if (!url) return { ok: false, note: '没有原岗位链接，投不了' };
+    if (!message) return { ok: false, note: '招呼语是空的' };
+
+    try {
+      await win.loadURL(url);
+    } catch (e) {
+      return { ok: false, note: `岗位页打不开：${String(e.message || e).slice(0, 80)}` };
+    }
+    await sleep(1200);
+
+    // 撞验证页：给它几秒自动过，过不了就交回给人
+    let st = await this.applyPageState(win);
+    if (st.security) {
+      this.log(taskId, 'warn', `${title} · 撞到安全验证，等它自动通过…`);
+      for (let i = 0; i < 8; i += 1) {
+        await sleep(1500);
+        st = await this.applyPageState(win);
+        if (!st.security) break;
+      }
+      if (st.security) {
+        return {
+          ok: false,
+          manual: true,
+          note: '卡在安全验证页，需要你在窗口里手动过一次验证。整批已暂停',
+        };
+      }
+    }
+    if (st.needLogin) {
+      return { ok: false, manual: true, note: '页面要求登录（登录态失效），先重新扫码登录。整批已暂停' };
+    }
+
+    // 像人一样看一会儿 JD：往下滚两下，中间停一停
+    for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i += 1) {
+      try {
+        await win.webContents.executeJavaScript(
+          `(() => { window.scrollBy(0, ${240 + Math.floor(Math.random() * 380)}); return 1; })()`
+        );
+      } catch {
+        /* 忽略 */
+      }
+      await sleep(700 + Math.floor(Math.random() * 1100));
+    }
+
+    const clicked = await this.clickStartChat(win);
+    if (!clicked || !clicked.ok) {
+      const hint = clicked && clicked.cand && clicked.cand.length
+        ? `页面上像按钮的有：${clicked.cand.join(' / ')}`
+        : '页面上没有「立即沟通」按钮（岗位可能已下线，或页面结构变了）';
+      return { ok: false, note: hint };
+    }
+    this.log(taskId, 'info', `${title} · 点了「${clicked.text || '立即沟通'}」，等聊天框`);
+
+    // 点击后可能同页跳转，也可能开新窗口（已被 setWindowOpenHandler 接管成同窗口）
+    let box = null;
+    for (let i = 0; i < 20; i += 1) {
+      await sleep(700);
+      const s2 = await this.applyPageState(win);
+      if (s2.security) return { ok: false, manual: true, note: '点沟通后跳到验证页，需要手动过一次' };
+      box = await this.focusChatInput(win);
+      if (box && box.ok) break;
+    }
+    if (!box || !box.ok) {
+      return { ok: false, note: '进了聊天页但没找到输入框（选择器需要校准）' };
+    }
+
+    await sleep(500 + Math.floor(Math.random() * 900));
+    const typed = await this.typeLikeHuman(win, message);
+    if (!typed) return { ok: false, note: '文字没能输进输入框' };
+    await sleep(400 + Math.floor(Math.random() * 700));
+
+    const sent = await this.clickSend(win);
+    if (!sent || !sent.ok) {
+      // 大多数聊天框回车即发送，作为兜底
+      try {
+        win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+        win.webContents.sendInputEvent({ type: 'char', keyCode: '\r' });
+        win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+      } catch {
+        return { ok: false, note: '没找到发送按钮，回车也没送进去' };
+      }
+    }
+
+    // 核对：发出去的这段话应该出现在页面上
+    await sleep(1800);
+    const probe = message.slice(0, 12).replace(/\s+/g, ' ');
+    const seen = await this.pageHasText(win, probe);
+    if (seen) {
+      const left = await this.chatDraftLeft(win);
+      if (left && left.includes(message.slice(0, 6))) {
+        return { ok: false, note: '文字还在输入框里，可能没点中发送' };
+      }
+      return { ok: true, note: `已发送（${message.length} 字）` };
+    }
+
+    const left = await this.chatDraftLeft(win);
+    if (left && left.includes(message.slice(0, 6))) {
+      return { ok: false, note: '文字留在输入框里，没发出去（发送按钮可能变了）' };
+    }
+    return { ok: false, note: '点了发送但页面没出现这段消息，去聊天页核对一下' };
+  }
+
+  /**
+   * 批量投递。
+   *
+   * 节奏按真人来：一条投完等 interval 秒再动下一条。用户看得到的是「进度 + 每条的成败」，
+   * 看不到的是中间那些随机停顿 —— 固定节奏本身就是机器特征。
+   */
+  async apply({ source, spec = {}, tasks = [], interval = 30, taskId, name }) {
+    if (this.busy.has(source)) {
+      throw new Error(`${spec.name || source} 正在忙（抓取或投递中），等当前任务结束再投`);
+    }
+    this.busy.add(source);
+    this.tasks.set(taskId, { cancelled: false });
+
+    const hints = spec.cookie_hints || [];
+    const label = spec.name || name || source;
+    const gaps = Math.max(5, Math.min(Number(interval) || 30, 600));
+    const results = [];
+    const report = (r) => {
+      results.push(r);
+      try {
+        this.onResult({ taskId, ...r });
+      } catch {
+        /* 忽略回调异常，别因为写库失败中断投递 */
+      }
+    };
+
+    try {
+      if (!(await this.hasLogin(source, hints))) {
+        throw new Error(`还没有登录 ${label}，先在「抓取」页点一次「登录」扫码`);
+      }
+
+      const win = this.ensureWindow(source, { title: `${label} · 一键投递中`, mode: 'background' });
+      this.log(taskId, 'ok', `开始投递 ${tasks.length} 条，每条间隔 ${gaps} 秒。窗口在后台，别关它`);
+
+      for (let i = 0; i < tasks.length; i += 1) {
+        const stop = this.isCancelRequested(taskId, source);
+        if (stop) {
+          this.log(taskId, 'warn', stop === 'closed' ? '投递窗口被关掉，任务中止' : '已取消投递');
+          break;
+        }
+
+        const t = tasks[i];
+        const title = t.title || t.job_id;
+        this.log(taskId, 'info', `[${i + 1}/${tasks.length}] ${title} · ${t.company || ''}`);
+
+        const out = await this.applyOne(win, t, taskId, label);
+        if (out.ok) {
+          this.log(taskId, 'ok', `[${i + 1}/${tasks.length}] ${title} · ${out.note}`);
+          report({ job_id: t.job_id, title, ok: true, note: out.note, message: t.message });
+        } else {
+          this.log(taskId, 'error', `[${i + 1}/${tasks.length}] ${title} · ${out.note}`);
+          report({ job_id: t.job_id, title, ok: false, note: out.note, message: t.message });
+          if (out.manual) {
+            // 把窗口挪到眼前让用户处理，然后整批停下 —— 硬闯只会加速封号
+            try {
+              win.setSkipTaskbar(false);
+              win.setPosition(120, 60);
+              win.show();
+              win.focus();
+            } catch {
+              /* 忽略 */
+            }
+            this.log(taskId, 'warn', '需要你手动处理，窗口已经调出来了。处理完可以再点一次一键投递');
+            break;
+          }
+        }
+
+        if (i < tasks.length - 1) {
+          this.log(taskId, 'info', `等 ${gaps} 秒再投下一条`);
+          for (let w = 0; w < gaps; w += 1) {
+            if (this.isCancelRequested(taskId, source)) break;
+            await sleep(1000);
+          }
+        }
+      }
+
+      const okN = results.filter((r) => r.ok).length;
+      this.log(taskId, okN ? 'ok' : 'warn', `投递结束：成功 ${okN} 条，失败 ${results.length - okN} 条`);
+      return { results, sent: okN, failed: results.length - okN };
+    } catch (e) {
+      this.log(taskId, 'error', String(e.message || e));
+      return { results, sent: results.filter((r) => r.ok).length, failed: results.length, error: String(e.message || e) };
+    } finally {
+      this.busy.delete(source);
+      this.tasks.delete(taskId);
+    }
   }
 }
 

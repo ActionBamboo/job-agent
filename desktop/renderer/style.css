@@ -852,7 +852,13 @@ input[type="range"].sm-slider::-webkit-slider-thumb {
 .sm-skills .lbl { font-size: 11.3px; color: var(--text-3); padding: 1px 0; }
 .sm-note { font-size: 11.5px; color: var(--amber); margin-top: 6px; }
 
-.sm-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+/* 三个按钮横着排：之前是竖排，加上「打招呼」之后变成四行高，把卡片顶得很高。
+   JD 字数已经挪到上面的 meta 行，这里不再占宽度。 */
+.sm-actions {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  align-items: center; justify-content: flex-end;
+  max-width: 260px;
+}
 
 .sm-empty {
   padding: 26px 16px;
@@ -889,3 +895,194 @@ input[type="range"].sm-slider::-webkit-slider-thumb {
   color: var(--text-2);
   border: 1px dashed var(--border-strong);
 }
+
+/* ---------------- 公司调研 ---------------- */
+/* 语义色：评价场景下「好=绿、差=红」是常识，和股票的涨跌配色无关 */
+.good { color: var(--green); }
+.warn { color: var(--amber); }
+.bad { color: var(--red); }
+
+.cr-loading {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 28px 18px; text-align: center; font-size: 13px;
+  background: var(--surface-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+}
+
+.cr-top {
+  display: grid; grid-template-columns: 104px 1fr; gap: 14px;
+}
+.cr-verdict {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; padding: 14px 8px; border-radius: var(--radius-sm);
+  background: var(--surface-3); color: var(--text-2);
+}
+.cr-verdict b { font-size: 17px; letter-spacing: .5px; }
+.cr-verdict span { font-size: 11px; color: var(--text-3); }
+.cr-verdict.good { background: var(--green-soft); color: var(--green); }
+.cr-verdict.warn { background: var(--amber-soft); color: var(--amber); }
+.cr-verdict.bad { background: var(--red-soft); color: var(--red); }
+
+.cr-facts { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cr-line { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.cr-line .lbl { font-size: 11.5px; color: var(--text-3); }
+.cr-line b { font-size: 14px; }
+.cr-reason { font-size: 12.6px; line-height: 1.75; color: var(--text); }
+.cr-sub { font-size: 11.8px; line-height: 1.7; color: var(--text-3); }
+
+.cr-block { margin-top: 12px; }
+.cr-h {
+  font-size: 11.5px; font-weight: 600; color: var(--text-3);
+  letter-spacing: .4px; margin-bottom: 5px;
+}
+.cr-h.good { color: var(--green); }
+.cr-h.bad { color: var(--red); }
+
+.cr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cr-list {
+  margin: 0; padding-left: 16px;
+  font-size: 12.4px; line-height: 1.8; color: var(--text-2);
+}
+.cr-list.pros li::marker { color: var(--green); }
+.cr-list.cons li::marker { color: var(--red); }
+
+.cr-details { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.cr-details summary {
+  cursor: pointer; font-size: 12px; color: var(--text-3);
+  user-select: none; list-style: none;
+}
+.cr-details summary::-webkit-details-marker { display: none; }
+.cr-details summary::before { content: '▸ '; }
+.cr-details[open] summary::before { content: '▾ '; }
+.cr-details summary:hover { color: var(--accent); }
+.cr-src { margin-top: 10px; }
+.cr-snippet {
+  font-size: 11.6px; line-height: 1.75; color: var(--text-3);
+  background: var(--surface-2); border-radius: 6px; padding: 8px 10px;
+  max-height: 130px; overflow: auto;
+}
+
+/* ---------------- 薪资低于期望 ---------------- */
+/* 只标红薪资，不加徽标不写说明。够不够看、投不投，用户自己判断 */
+.sm-title .s.low { color: var(--red); }
+
+.jd-salhint {
+  margin: 6px 0 2px;
+  font-size: 12px; line-height: 1.6;
+  color: var(--red);
+}
+
+/* ---------------- 打招呼语 ---------------- */
+/* 三版并排放在最上面，正文占最大块：这个弹窗的目的就是「看一眼、改两个字、复制走」，
+   所以不给旁边的说明留太多位置。 */
+
+.gr-loading {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 30px 6px; text-align: center;
+}
+.gr-loading b { font-size: 13.8px; }
+.gr-loading span { max-width: 340px; line-height: 1.75; }
+
+.gr-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 26px 8px; text-align: center;
+}
+.gr-empty span { max-width: 380px; line-height: 1.8; }
+
+.gr-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.gr-tab {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text-2);
+  font: inherit; font-size: 12.4px; font-weight: 600;
+  cursor: pointer; transition: background .14s, border-color .14s, color .14s;
+}
+.gr-tab i { font-style: normal; font-weight: 500; font-size: 11px; color: var(--text-3); }
+.gr-tab:hover { border-color: var(--border-strong); color: var(--text); }
+.gr-tab.on { background: var(--accent-soft); border-color: #c9c8fb; color: var(--accent); }
+.gr-tab.on i { color: var(--accent); opacity: .72; }
+
+.gr-use { margin: 0 0 7px 2px; font-size: 12px; color: var(--text-3); }
+
+/* 直接给他改的地方：默认就是可编辑的 textarea，不是只读的展示块 */
+.gr-text {
+  width: 100%; min-height: 130px; resize: vertical;
+  padding: 12px 14px;
+  font: inherit; font-size: 13.6px; line-height: 1.85;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  outline: none;
+}
+.gr-text:focus { border-color: var(--accent); background: var(--surface); }
+
+.gr-bar { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+
+.gr-tweak { display: flex; gap: 8px; margin-top: 9px; }
+.gr-tweak .input { flex: 1; min-width: 0; }
+
+.gr-more { margin-top: 12px; padding-top: 9px; border-top: 1px solid var(--border); }
+.gr-more > summary {
+  list-style: none; cursor: pointer;
+  font-size: 12.4px; font-weight: 600; color: var(--text-2);
+}
+.gr-more > summary::-webkit-details-marker { display: none; }
+.gr-more > summary::before { content: '▸'; margin-right: 5px; color: var(--text-3); }
+.gr-more[open] > summary::before { content: '▾'; }
+
+.gr-list { margin: 7px 0 0; padding: 0; list-style: none; }
+.gr-list li {
+  position: relative; padding-left: 16px;
+  font-size: 12.4px; line-height: 1.8; color: var(--text-2);
+}
+.gr-list li::before { position: absolute; left: 2px; }
+.gr-list.good li::before { content: '✓'; color: var(--green); }
+.gr-list.warn li::before { content: '!'; color: var(--amber); font-weight: 700; }
+
+.gr-tip {
+  margin-top: 12px; padding: 9px 12px;
+  font-size: 12.4px; line-height: 1.75;
+  color: var(--text-2);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+}
+
+/* ---------------- 一键投递 ---------------- */
+/* 确认框里只放三件事：投几条、多久、有什么坑。剩下的交给日志区滚动。 */
+
+.ap-facts {
+  display: flex; gap: 26px; align-items: baseline;
+  padding: 2px 2px 10px;
+}
+.ap-facts > div { display: flex; align-items: baseline; gap: 5px; }
+.ap-facts b {
+  font-size: 21px; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums; color: var(--text);
+}
+.ap-facts span { font-size: 11.8px; color: var(--text-3); }
+
+.ap-notes {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 9px 12px; border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12.4px; line-height: 1.72; color: var(--text-2);
+}
+.ap-notes .warn { color: var(--amber); }
+
+/* 已投过的岗位：卡片整体压暗一点，标记放标题行，不抢薪资和匹配度的位置 */
+.sm-card.applied { background: var(--surface-2); }
+.sm-applied {
+  flex: none;
+  font-size: 10.5px; font-weight: 600; line-height: 1.5;
+  padding: 1px 7px; border-radius: 999px;
+  background: var(--surface-3); color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* 候选岗位卡片里的「已投」：跟匹配结果卡片保持同一套视觉 */
+.job-item.applied { background: var(--surface-2); }
+.job-item.applied .nm { color: var(--text-2); }

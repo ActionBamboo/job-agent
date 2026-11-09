@@ -198,7 +198,6 @@ def start_scrape(
 def start_login(source: str = "boss") -> Task:
     scraper = registry.require(source)
     params = {"source": source}
-
     def run(task: Task) -> None:
         try:
             result = asyncio.run(scraper.login(task.log, task.should_stop))

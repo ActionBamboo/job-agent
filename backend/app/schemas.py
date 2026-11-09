@@ -27,6 +27,8 @@ class Resume(BaseModel):
     education: list[Education] = Field(default_factory=list)
     summary: str = ""
     target_role: str = ""
+    # 期望月薪（K）。只用来在匹配结果上给「低于期望」的提示，不参与筛选
+    expected_salary: float = 0
 
 
 class Job(BaseModel):

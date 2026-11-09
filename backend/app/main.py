@@ -1,4 +1,6 @@
 """FastAPI 接口层（桌面端与浏览器共用）。"""
+import hashlib
+import json
 import time
 import uuid
 from pathlib import Path
@@ -9,7 +11,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import runner, skill_match, store
+from . import company_research, greeting, runner, salary, skill_match, store
 from .agent_graph import match_job
 from .config import settings, web_dir
 from .parser import extract_resume_text, parse_resume
@@ -79,6 +81,19 @@ class ScrapeReq(BaseModel):
     source: str = Field(default="boss", description="抓取器 key，如 boss / job51")
 
 
+class ApplyRecordReq(BaseModel):
+    """投递结果回写。
+
+    投递本身在 Electron 内置浏览器里跑（Playwright 会被招聘站清成 about:blank），
+    后端只接收每一条的结果。失败的不记为已投，下次勾选还能重投。
+    """
+
+    job_id: str
+    status: str = Field(default="sent", description="sent / failed / skipped")
+    message: str = ""
+    note: str = ""
+
+
 class SkillMatchReq(BaseModel):
     """技能级规则匹配入参。
 
@@ -90,6 +105,27 @@ class SkillMatchReq(BaseModel):
     source: str = ""
     threshold: int = 90
     resume: dict | None = None
+
+
+class CompanyReq(BaseModel):
+    """公司调研入参。refresh=True 时忽略缓存重新查。"""
+
+    name: str
+    refresh: bool = False
+
+
+class GreetingReq(BaseModel):
+    """打招呼语入参。
+
+    job_id 优先（从库里取最新 JD）；也可以直接传 job 对象（还没入库的岗位）。
+    extra 是临时追加的要求，比如「再口语一点」「别提我是前端」。
+    """
+
+    job_id: str | None = None
+    job: dict | None = None
+    resume: dict | None = None
+    refresh: bool = False
+    extra: str = ""
 
 
 # ----------------------------- 基础 -----------------------------
@@ -302,6 +338,8 @@ def match_skills(body: SkillMatchReq | None = None):
 
     threshold = max(0, min(100, int(body.threshold)))
     passed = sum(1 for x in items if (x["score"] or 0) >= threshold and x["score"] is not None)
+    exp = salary.parse_expected(resume.get("expected_salary"))
+    below = sum(1 for x in items if (x.get("salary_hint") or {}).get("level") == "low")
     return {
         "resume_skills": skills,
         "items": items,
@@ -309,7 +347,106 @@ def match_skills(body: SkillMatchReq | None = None):
         "threshold": threshold,
         "passed": passed,
         "best": items[0]["score"] if items else None,
+        # 期望薪资只在界面上提示，不参与筛选
+        "expected_k": exp,
+        "below_expected": below,
     }
+
+
+@app.get("/salary/hint")
+def salary_hint_api(salary: str = "", expected: float = 0):
+    """单个岗位的薪资提示。岗位库等没有走匹配接口的地方用它补提示。
+
+    只返回一句话，不参与任何筛选。
+    """
+    # 参数名就叫 salary，会把模块名遮蔽掉，所以这里单独把函数引进来
+    from .salary import salary_hint as _hint
+
+    return _hint(salary, expected if expected > 0 else None)
+
+
+@app.post("/company/research")
+def company_research_api(body: CompanyReq):
+    """调研一家公司：是不是外包、员工/求职者怎么评价。
+
+    走搜索引擎摘要（脉脉、看准、知乎、雪球的片段都在里面），不用登录第三方账号。
+    结果缓存 7 天，refresh=true 可强制重查。
+    """
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="公司名不能为空")
+    if not body.refresh:
+        cached = store.get_company_research(name)
+        if cached:
+            return cached
+    try:
+        data = company_research.research(name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"调研失败：{e}")
+    store.save_company_research(name, data)
+    return data
+
+
+@app.get("/company/researched")
+def company_researched():
+    """已调研过的公司列表，界面用来标「查过了」。"""
+    return store.list_company_research()
+
+
+@app.post("/greeting")
+def greeting_api(body: GreetingReq):
+    """根据岗位 JD + 当前简历，生成发给 HR 的第一条打招呼语。
+
+    一次给三个版本（逐条对标 / 项目切入 / 极简），另外附上
+    「我拿什么对上」「还缺什么」——让用户自己判断发哪条、要不要先补材料。
+    同一岗位同一份简历会走缓存，refresh=true 强制重写。
+    """
+    job: dict | None = None
+    if body.job_id:
+        job = store.get_job(body.job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="岗位不存在")
+    elif body.job:
+        job = body.job
+    else:
+        raise HTTPException(status_code=400, detail="需要 job_id 或 job")
+
+    resume = body.resume or store.load_resume()
+    if not resume:
+        raise HTTPException(status_code=400, detail="还没上传简历，先去「我的简历」传一份")
+    no_jd = len(str(job.get("jd_text") or "").strip()) < 20
+
+    job_id = str(job.get("id") or "")
+    # 缓存指纹：简历改了、JD 重新抓过、或者追加了额外要求，都应该重新生成
+    sig = hashlib.sha1(
+        "\n".join(
+            [
+                str(job.get("jd_text") or ""),
+                json.dumps(resume, ensure_ascii=False, sort_keys=True),
+                body.extra.strip(),
+                str(job.get("source") or ""),
+            ]
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+
+    if job_id and not body.refresh:
+        cached = store.get_greeting(job_id, sig)
+        if cached:
+            return cached
+
+    try:
+        data = greeting.build(job, resume, refresh=body.refresh, extra=body.extra)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if no_jd:
+        data["no_jd"] = True
+
+    if job_id and data.get("variants"):
+        store.save_greeting(job_id, sig, data)
+    return data
 
 
 @app.post("/match/{job_id}")
@@ -474,6 +611,49 @@ def scrape_login(source: str = "boss"):
     except (RuntimeError, KeyError) as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     return task.snapshot(0)
+
+
+@app.post("/apply/record")
+def apply_record(body: ApplyRecordReq):
+    """记一条投递结果。
+
+    投递动作本身在内置浏览器里完成（Electron），后端只负责落库：
+    哪条投成功了、发的是哪句话、失败原因是什么。失败的不标成已投，
+    下次勾选还会自动重投。
+    """
+    if body.status not in ("sent", "failed", "skipped"):
+        raise HTTPException(status_code=400, detail="status 只能是 sent / failed / skipped")
+    store.save_application(body.job_id, body.status, body.message or "", body.note or "")
+    return store.get_application(body.job_id)
+
+
+@app.get("/applications")
+def applications():
+    """投递记录：job_id → 状态，前端用来标「已投」。"""
+    return store.list_applications()
+
+
+@app.post("/jobs/jd-backfill")
+def jobs_jd_backfill(payload: dict):
+    """投递前补抓到的 JD 正文回写：把这些岗位的 jd_text 补上，下次就能对着要求写。"""
+    items = payload.get("items") or []
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="items 必须是数组")
+    ok = 0
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        jid = str(it.get("job_id") or "").strip()
+        jd = str(it.get("jd_text") or "").strip()
+        if not jid or len(jd) < 20:
+            continue
+        if store.update_job_jd(
+            jid, jd,
+            str(it.get("experience_req") or "").strip(),
+            str(it.get("education_req") or "").strip(),
+        ):
+            ok += 1
+    return {"updated": ok}
 
 
 @app.get("/tasks/{task_id}")

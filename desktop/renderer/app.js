@@ -78,22 +78,22 @@ function toast(msg, type = 'info', title = '') {
   }, type === 'err' ? 5200 : 2800);
 }
 
-function copyText(text) {
-  const done = () => toast('已复制到剪贴板', 'ok');
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(done).catch(fallback);
-  } else {
-    fallback();
-  }
-  function fallback() {
+function copyText(text, okTip = '已复制到剪贴板') {
+  const done = () => toast(okTip, 'ok');
+  const fallback = () => {
     const ta = document.createElement('textarea');
-    ta.value = text;
+    ta.value = String(text ?? '');
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
     document.body.appendChild(ta);
     ta.select();
     try { document.execCommand('copy'); done(); } catch { toast('复制失败，请手动选择文本', 'err'); }
     ta.remove();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(fallback);
+  } else {
+    fallback();
   }
 }
 
@@ -139,9 +139,49 @@ function confirmBox(title, message, okText = '确定') {
   });
 }
 
-/* ---------------- 岗位详情 / 打开原岗位 ---------------- */
+/** 数字输入弹窗。Electron 里没有 window.prompt，只能用自绘的。返回 null 表示取消。 */
+function askNumber(title, { label = '', value = '', hint = '', placeholder = '', min = 0, step = 0.5 } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const { el, close } = openDialog({
+      title,
+      body: `
+        ${label ? `<label class="small muted" style="display:block;margin-bottom:6px">${esc(label)}</label>` : ''}
+        <input class="input" id="num-in" type="number" min="${min}" step="${step}"
+               value="${esc(String(value))}" placeholder="${esc(placeholder)}" />
+        ${hint ? `<div class="small muted" style="margin-top:8px;line-height:1.7">${esc(hint)}</div>` : ''}`,
+      footer: `<div class="left"></div>
+        <button class="btn" data-no>取消</button>
+        <button class="btn primary" data-ok>保存</button>`,
+      onMount: (dlg) => {
+        const input = $('#num-in', dlg);
+        input.focus();
+        input.select();
+      },
+    });
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      close();
+      resolve(v);
+    };
+    const read = () => {
+      const raw = String($('#num-in', el).value || '').trim();
+      if (!raw) return finish(0);      // 清空 = 取消期望薪资
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) { toast('填个正常数字，比如 15', 'warn'); return; }
+      finish(n);
+    };
+    $('[data-no]', el).onclick = () => finish(null);
+    $('[data-ok]', el).onclick = read;
+    $('#num-in', el).addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') read();
+      if (e.key === 'Escape') finish(null);
+    });
+  });
+}
 
-/**
+/* ---------------- 岗位详情 / 打开原岗位 ---------------- *//**
  * 打开原岗位页。
  *
  * 优先用内置浏览器：招聘站的原岗位页要登录态才看得到正文，系统浏览器里是未登录
@@ -177,12 +217,34 @@ async function openOriginalUrl(url, opts = {}) {
   return ok;
 }
 
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast('链接已复制', 'ok');
-  } catch {
-    toast('复制失败，请手动选中复制', 'warn');
+/**
+ * 复制到剪贴板。
+ *
+ * 这个函数原先被定义了两遍，后一遍只有一句「链接已复制」，
+ * 结果复制招呼语也弹出「链接已复制」，文案对不上。合并成一份，提示语由调用方给。
+ * Electron 里 navigator.clipboard 偶尔不可用，保留 textarea 兜底。
+ */
+async function copyText(text, okTip = '已复制到剪贴板') {
+  const done = () => toast(okTip, 'ok');
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = String(text ?? '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch { toast('复制失败，请手动选中复制', 'warn'); }
+    ta.remove();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(String(text ?? ''));
+      done();
+    } catch {
+      fallback();
+    }
+  } else {
+    fallback();
   }
 }
 
@@ -201,6 +263,270 @@ function skillChips(list, cls) {
   return (list || []).map((s) => `<span class="${cls}">${esc(s)}</span>`).join('');
 }
 
+// ---------------------------------------------------------------- 公司调研
+// 匹配上了还不够，得知道这家公司值不值得投：是不是外包、员工怎么说。
+// 数据来自「公司名 + 外包 / 员工评价 / 脉脉」的搜索摘要与相关推荐词，
+// 再由大模型汇总——摘要本身就来自脉脉、看准、知乎，不用登录第三方账号。
+
+const CR_ADVICE_CLASS = { 建议投: 'good', 可以投: 'good', 谨慎: 'warn', 别投: 'bad' };
+
+function crAdviceClass(advice) {
+  return CR_ADVICE_CLASS[advice] || 'warn';
+}
+
+function crVerdictClass(verdict) {
+  if (verdict === '是') return 'bad';
+  if (verdict === '疑似') return 'warn';
+  if (verdict === '不是') return 'good';
+  return 'muted';
+}
+
+function renderCompanyResearch(host, data) {
+  const a = data.analysis || {};
+  const out = a.outsourcing || {};
+  const verdict = out.verdict || '材料不足';
+  const advice = a.advice || '谨慎';
+  const cls = crAdviceClass(advice);
+  const sources = data.sources || [];
+  const okCount = sources.filter((s) => s.ok).length;
+
+  const items = (arr, kind) => (arr && arr.length)
+    ? `<ul class="cr-list ${kind}">${arr.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>`
+    : '<div class="small muted" style="padding:6px 0">没查到相关说法</div>';
+
+  const signals = (a.signals || []).map((s) => `<span class="chip amber">${esc(s)}</span>`).join('');
+  const related = (data.related || []).map((s) => `<span class="chip">${esc(s)}</span>`).join('');
+
+  host.innerHTML = `
+    <div class="cr-top">
+      <div class="cr-verdict ${cls}">
+        <b>${esc(advice)}</b>
+        <span>${esc(a.confidence || '')}置信度</span>
+      </div>
+      <div class="cr-facts">
+        <div class="cr-line">
+          <span class="lbl">是不是外包</span>
+          <b class="${crVerdictClass(verdict)}">${esc(verdict)}</b>
+        </div>
+        ${out.reason ? `<div class="cr-sub">依据：${esc(out.reason)}</div>` : ''}
+        ${a.advice_reason ? `<div class="cr-reason">${esc(a.advice_reason)}</div>` : ''}
+      </div>
+    </div>
+    ${signals ? `<div class="cr-block"><div class="cr-h">关键信号</div><div class="row wrap" style="gap:6px">${signals}</div></div>` : ''}
+    <div class="cr-grid">
+      <div class="cr-block"><div class="cr-h good">正面评价</div>${items(a.pros, 'pros')}</div>
+      <div class="cr-block"><div class="cr-h bad">负面评价</div>${items(a.cons, 'cons')}</div>
+    </div>
+    <details class="cr-details">
+      <summary>看搜索依据（${okCount}/${sources.length} 个查询成功）</summary>
+      ${related ? `<div class="cr-block"><div class="cr-h">相关推荐词</div><div class="row wrap" style="gap:6px">${related}</div></div>` : ''}
+      ${(data.materials || []).map((m) => `
+        <div class="cr-src">
+          <div class="cr-h">${esc(m.query)}${m.ok ? '' : ' <span class="bad">没抓到</span>'}</div>
+          <div class="cr-snippet">${esc((m.snippet || m.error || '').slice(0, 800))}</div>
+        </div>`).join('')}
+    </details>
+    ${data.cached ? `<div class="small muted" style="margin-top:10px">来自 ${esc(data.cached_at || '')} 的缓存 · 点「重新查」可刷新</div>` : ''}
+  `;
+}
+
+/**
+ * 公司调研弹窗。
+ * @param {string} company 公司名
+ * @param {{refresh?:boolean}} opts
+ */
+async function openCompanyDialog(company, opts = {}) {
+  const name = String(company || '').trim();
+  if (!name) {
+    toast('这条岗位没有公司名，查不了', 'err');
+    return;
+  }
+
+  const { el } = openDialog({
+    title: name,
+    subtitle: '第三方评价 · 判断是不是外包',
+    wide: true,
+    body: '<div data-cr-host></div>',
+    footer: `<div class="left"><button class="btn ghost sm" data-cr-refresh>重新查</button></div>
+      <button class="btn" data-close>关闭</button>`,
+  });
+
+  const host = el.querySelector('[data-cr-host]');
+  const refreshBtn = el.querySelector('[data-cr-refresh]');
+
+  async function load(refresh) {
+    host.innerHTML = `<div class="cr-loading">
+      <b>正在查第三方信息…</b>
+      <span class="small muted">公司名 + 外包 / 员工评价 / 脉脉，三个查询，约 5~10 秒</span>
+    </div>`;
+    refreshBtn.disabled = true;
+    try {
+      const data = await api('/company/research', { method: 'POST', body: { name, refresh: !!refresh } });
+      renderCompanyResearch(host, data);
+    } catch (e) {
+      host.innerHTML = `<div class="cr-loading">
+        <b class="bad">没查到</b>
+        <span class="small muted">${esc(e.message || '未知错误')}</span>
+        <span class="small muted">可能是网络问题或搜索接口临时被拦，稍后再试</span>
+      </div>`;
+    } finally {
+      refreshBtn.disabled = false;
+    }
+  }
+
+  refreshBtn.onclick = () => load(true);
+  await load(!!opts.refresh);
+}
+
+
+// ---------------------------------------------------------------- 打招呼语
+// 看到一条岗位能不能「马上发一句话过去」，决定了他究竟会不会真的去投。
+// 三版一起给（逐条对标 / 项目切入 / 极简），外加「我拿什么对上」「还缺什么」。
+// 「还缺什么」故意留在明面上，不是泼冷水：那条缺口不提前知道，
+// 等 HR 一追问就当场穿帮，比不发更糟。
+
+function grLoading() {
+  return `<div class="gr-loading">
+    <b>正在对着 JD 写…</b>
+    <span class="small muted">先读一遍岗位职责和任职要求，再从简历里挑能对上的事，约 3~8 秒</span>
+  </div>`;
+}
+
+/**
+ * 打招呼语弹窗。
+ * @param {string|object} jobInput 岗位 id 或岗位对象
+ */
+async function openGreetingDialog(jobInput, opts = {}) {
+  const job = typeof jobInput === 'string' ? { id: jobInput } : { ...(jobInput || {}) };
+  const st = { data: null, idx: 0, edits: {}, extra: '' };
+
+  const { el } = openDialog({
+    title: '写打招呼语',
+    subtitle: [job.company, job.title].filter(Boolean).map((s) => String(s)).join(' · '),
+    wide: true,
+    body: '<div data-gr-host></div>',
+    footer: `<div class="left" style="gap:6px">
+        <button class="btn ghost sm" data-gr-regen>重新生成</button>
+        <button class="btn ghost sm" data-gr-orig>去原岗位发</button>
+      </div>
+      <button class="btn" data-close>关闭</button>`,
+  });
+
+  const host = el.querySelector('[data-gr-host]');
+  const regenBtn = el.querySelector('[data-gr-regen]');
+  const origBtn = el.querySelector('[data-gr-orig]');
+  if (!job.url) origBtn.classList.add('hidden');
+  origBtn.onclick = () => openOriginalUrl(job.url, { source: job.source, title: job.title });
+
+  const keyOf = (v) => v.style || v.label || 'v';
+  const cur = () => (st.data && st.data.variants ? st.data.variants[st.idx] : null);
+
+  function paint() {
+    const data = st.data;
+    const list = (data && data.variants) || [];
+    if (!list.length) {
+      host.innerHTML = `<div class="gr-empty">
+        <b>没能生成</b>
+        <span class="small muted">${esc((data && (data.tip || data.note)) || '再点一次「重新生成」试试')}</span>
+      </div>`;
+      return;
+    }
+
+    const v = list[Math.min(st.idx, list.length - 1)];
+    const text = st.edits[keyOf(v)] ?? v.text;
+
+    host.innerHTML = `
+      <div class="gr-tabs">
+        ${list.map((x, i) => `<button class="gr-tab${i === st.idx ? ' on' : ''}" data-gr-tab="${i}">
+          ${esc(x.label)}<i>${(st.edits[keyOf(x)] ?? x.text).length} 字</i>
+        </button>`).join('')}
+      </div>
+      ${v.use ? `<div class="gr-use">${esc(v.use)}</div>` : ''}
+      <textarea class="gr-text" data-gr-text spellcheck="false">${esc(text)}</textarea>
+      <div class="gr-bar">
+        <span class="small muted" data-gr-count>${text.length} 字</span>
+        <div style="flex:1"></div>
+        <button class="btn sm" data-gr-copy>复制这条</button>
+      </div>
+      <div class="gr-tweak">
+        <input class="input" data-gr-extra value="${esc(st.extra)}"
+               placeholder="想怎么改？比如：再口语一点 / 别提我做过前端 / 强调 MCP" />
+        <button class="btn sm" data-gr-rewrite>按这个改</button>
+      </div>
+      ${(data.matched || []).length ? `<details class="gr-more">
+        <summary>我拿什么对上（${data.matched.length} 条）</summary>
+        <ul class="gr-list good">${data.matched.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>
+      </details>` : ''}
+      ${(data.gaps || []).length ? `<details class="gr-more" open>
+        <summary>这几条要求你没有直接经验（${data.gaps.length} 条）</summary>
+        <ul class="gr-list warn">${data.gaps.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>
+      </details>` : ''}
+      ${data.tip ? `<div class="gr-tip">${esc(data.tip)}</div>` : ''}
+      ${data.cached ? '<div class="small muted" style="margin-top:8px">这是上次生成的结果 · 点「重新生成」可以重写</div>' : ''}`;
+
+    // 切换版本：编辑过的内容存在 edits 里，来回切不丢
+    $$('[data-gr-tab]', host).forEach((b) => {
+      b.onclick = () => {
+        const ta = $('[data-gr-text]', host);
+        const c = cur();
+        if (ta && c) st.edits[keyOf(c)] = ta.value;
+        st.idx = Number(b.dataset.grTab);
+        paint();
+      };
+    });
+
+    const ta = $('[data-gr-text]', host);
+    const count = $('[data-gr-count]', host);
+    ta.oninput = () => {
+      st.edits[keyOf(v)] = ta.value;
+      count.textContent = `${ta.value.length} 字`;
+      const tabI = host.querySelector(`[data-gr-tab="${st.idx}"] i`);
+      if (tabI) tabI.textContent = `${ta.value.length} 字`;
+    };
+    ta.onfocus = () => ta.select();
+
+    $('[data-gr-copy]', host).onclick = () => copyText(ta.value, '招呼语已复制，去原岗位粘贴发出去');
+
+    const extraIn = $('[data-gr-extra]', host);
+    $('[data-gr-rewrite]', host).onclick = () => {
+      const val = extraIn.value.trim();
+      if (!val) { toast('先写一句想怎么改', 'warn'); extraIn.focus(); return; }
+      st.extra = val;
+      load(true);
+    };
+    extraIn.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); $('[data-gr-rewrite]', host).click(); }
+    };
+  }
+
+  async function load(refresh) {
+    host.innerHTML = grLoading();
+    regenBtn.disabled = true;
+    try {
+      const body = { refresh: !!refresh };
+      if (st.extra) body.extra = st.extra;
+      if (job.id) body.job_id = job.id;
+      else body.job = job;
+      st.data = await api('/greeting', { method: 'POST', body });
+      st.idx = 0;
+      st.edits = {};
+      paint();
+    } catch (e) {
+      st.data = null;
+      host.innerHTML = `<div class="gr-empty">
+        <b class="bad">没写出来</b>
+        <span class="small muted">${esc(e.message || '未知错误')}</span>
+      </div>`;
+    } finally {
+      regenBtn.disabled = false;
+    }
+  }
+
+  regenBtn.onclick = () => load(true);
+  await load(!!opts.refresh);
+}
+
+
 /**
  * 岗位详情弹窗：卡片 / 列表点击都走这里。
  *
@@ -217,6 +543,21 @@ async function openJobDialog(input, opts = {}) {
   const score = typeof opts.score === 'number' ? opts.score : (x && x.score);
 
   const jd = String(job.jd_text || '').trim();
+
+  // 薪资提示：匹配结果里后端已经算好带过来了；岗位库点进来时只有一条岗位，
+  // 就现问后端一句（同一套解析逻辑，不在前端重写一份）
+  let sh = x && x.salary_hint;
+  const myExp = x && x.expected_k ? x.expected_k
+    : Number((state.resume && state.resume.expected_salary) || 0);
+  if ((!sh || !sh.text) && myExp > 0 && job.salary) {
+    try {
+      sh = await api(`/salary/hint?salary=${encodeURIComponent(job.salary)}&expected=${myExp}`);
+    } catch { sh = null; }
+  }
+  const shLevel = sh && sh.text ? sh.level : '';
+  const salHintBlock = shLevel === 'low'
+    ? `<div class="jd-salhint">${esc(sh.text)}</div>`
+    : '';
   const chips = [
     job.city ? `<span class="chip line">${esc(job.city)}</span>` : '',
     job.experience_req ? `<span class="chip line">经验 ${esc(job.experience_req)}</span>` : '',
@@ -253,10 +594,12 @@ async function openJobDialog(input, opts = {}) {
         <div style="flex:1"></div>
         <span class="small muted">JD ${jd.length} 字</span>
       </div>
+      ${salHintBlock}
       ${scoreBlock}
       <div class="panel-soft jd-body">${jd ? esc(jd) : '<span class="muted">这条岗位没抓到 JD 正文，点下面的「看原岗位」到原网页看</span>'}</div>
       ${job.url ? `<div class="small muted mono jd-url">${esc(job.url)}</div>` : ''}`,
     footer: `<div class="left row" style="gap:6px">
+        <button class="btn ghost sm" id="jd-greet" title="照着这份 JD 和你的简历，写一条直接发给 HR 的话">写打招呼语</button>
         ${job.url ? '<button class="btn ghost sm" id="jd-orig">看原岗位（内置浏览器）</button>' : ''}
         ${job.url ? '<button class="btn ghost sm" id="jd-sys">用系统浏览器打开</button>' : ''}
         ${job.url ? '<button class="btn ghost sm" id="jd-copy">复制链接</button>' : ''}
@@ -276,8 +619,11 @@ async function openJobDialog(input, opts = {}) {
       if (!ok) toast('系统浏览器打开失败', 'err');
     };
     const copyBtn = $('#jd-copy', el);
-    if (copyBtn) copyBtn.onclick = () => copyText(job.url);
+    if (copyBtn) copyBtn.onclick = () => copyText(job.url, '链接已复制');
   }
+
+  const greetBtn = $('#jd-greet', el);
+  if (greetBtn) greetBtn.onclick = () => openGreetingDialog(job);
 
   const matchBtn = $('#jd-match', el);
   if (matchBtn) {
@@ -303,6 +649,8 @@ const state = {
   jobQuery: '',
   selected: new Set(),
   matchResults: [],
+  applications: {},   // job_id -> { status, applied_at }，已投过的不再重复发
+  applying: false,
   route: 'dashboard',
 };
 
@@ -613,6 +961,10 @@ function renderResume(r) {
     <div class="kv-list mt-12">
       <div class="kv-row"><span class="k">工作年限</span><span class="v">${r.years_exp ?? '—'} 年</span></div>
       <div class="kv-row"><span class="k">目标岗位</span><span class="v">${esc(r.target_role || '—')}</span></div>
+      <div class="kv-row"><span class="k">期望月薪</span><span class="v">
+        ${r.expected_salary ? `${esc(r.expected_salary)}K` : '<span class="muted">未填写</span>'}
+        <button class="btn ghost sm" id="edit-exp" style="margin-left:6px" title="低于期望的岗位只做提示，不会被筛掉">${r.expected_salary ? '改' : '填'}</button>
+      </span></div>
       <div class="kv-row"><span class="k">自我总结</span><span class="v">${esc(r.summary || '—')}</span></div>
     </div>
     ${skills ? `<div class="section-title mt-16">技能</div><div class="skill-cloud">${skills}</div>` : ''}
@@ -622,6 +974,25 @@ function renderResume(r) {
       <button class="btn primary sm" id="resume-to-match">用这份简历去匹配</button>
     </div>`;
   $('#resume-to-match').onclick = () => navigate('match');
+  const expBtn = $('#edit-exp');
+  if (expBtn) {
+    expBtn.onclick = async () => {
+      const val = await askNumber('期望月薪', {
+        label: '期望月薪（单位 K，比如 15）',
+        value: r.expected_salary || '',
+        hint: '只用来在匹配结果上提示「低于期望」，不会把岗位筛掉。大环境不好，低一点的岗位照样值得聊。',
+        placeholder: '15',
+      });
+      if (val === null) return;
+      try {
+        const next = { ...r, expected_salary: val };
+        await api('/resume', { method: 'POST', body: next });
+        state.resume = next;
+        toast(val > 0 ? `期望月薪已设为 ${val}K` : '已清空期望月薪');
+        renderResume(next);
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  }
 }
 
 /* ---------------- 视图：岗位库 ---------------- */
@@ -1237,8 +1608,15 @@ function skillCardHtml(x, threshold, forceDim, picked) {
   // 「优先 / 加分」类技能单独一栏：缺了也不扣分，不该和硬要求混在一起制造焦虑
   const bonusMiss = (x.bonus_miss || []).map((s) => `<span class="b">${esc(s)}</span>`).join('');
 
-  const meta = [job.company, job.city, job.experience_req, job.education_req]
+  const meta = [job.company, job.city, job.experience_req, job.education_req, x.jd_len ? `JD ${x.jd_len} 字` : '']
     .filter(Boolean).map(esc).join(' · ');
+
+  // 薪资低于期望：只把薪资标红，不弹徽标不写一句话。
+  // 差多少放在悬停提示里，够不够看用户自己判断，投不投也是用户自己勾。
+  const sh = x.salary_hint || null;
+  const lowSalary = !!(sh && sh.text && sh.level === 'low');
+  const salaryCls = `s${lowSalary ? ' low' : ''}`;
+  const salaryTitle = lowSalary ? ` title="${esc(sh.text)}"` : '';
 
   const skillsRow = (hit || miss)
     ? `${hit ? `<span class="lbl">命中</span>${hit}` : ''}${miss ? `<span class="lbl">还缺</span>${miss}` : ''}`
@@ -1250,7 +1628,11 @@ function skillCardHtml(x, threshold, forceDim, picked) {
       }</div>`
     : '';
 
-  return `<div class="sm-card${dim ? ' dim' : ''}${isPicked ? ' picked' : ''}" data-job="${esc(id)}" title="点击查看岗位详情">
+  const applied = state.applications[id] && state.applications[id].status === 'sent'
+    ? state.applications[id]
+    : null;
+
+  return `<div class="sm-card${dim ? ' dim' : ''}${isPicked ? ' picked' : ''}${applied ? ' applied' : ''}" data-job="${esc(id)}" title="点击查看岗位详情">
     <label class="sm-pick" title="勾选这条岗位">
       <input type="checkbox" data-pick="${esc(id)}"${isPicked ? ' checked' : ''} />
     </label>
@@ -1261,7 +1643,8 @@ function skillCardHtml(x, threshold, forceDim, picked) {
     <div class="sm-main">
       <div class="sm-title">
         <span class="t">${esc(job.title || '未命名岗位')}</span>
-        ${job.salary ? `<span class="s">${esc(job.salary)}</span>` : ''}
+        ${job.salary ? `<span class="${salaryCls}"${salaryTitle}>${esc(job.salary)}</span>` : ''}
+        ${applied ? `<span class="sm-applied" title="已经发过招呼语（${esc(applied.applied_at || '')}），再次勾选会重投">已投</span>` : ''}
       </div>
       ${meta ? `<div class="sm-sub">${meta}</div>` : ''}
       <div class="sm-skills">${skillsRow}</div>
@@ -1269,10 +1652,11 @@ function skillCardHtml(x, threshold, forceDim, picked) {
       ${x.note && (hit || miss) ? `<div class="sm-note">${esc(x.note)}</div>` : ''}
     </div>
     <div class="sm-actions">
+      ${job.company ? `<button class="btn sm ghosts" data-company="${esc(job.company)}" title="查这家公司是不是外包、口碑如何">查公司</button>` : ''}
+      <button class="btn sm ghosts" data-greet="${esc(id)}" title="照着这份 JD 和你的简历，写一条直接发给 HR 的话">打招呼</button>
       ${job.url
         ? `<button class="btn sm" data-orig="${esc(job.url)}" data-orig-src="${esc(job.source || '')}" data-orig-title="${esc(job.title || '')}">看原岗位</button>`
-        : '<span class="small muted">无原链接</span>'}
-      <span class="small muted">JD ${x.jd_len || 0} 字</span>
+        : ''}
     </div>
   </div>`;
 }
@@ -1306,8 +1690,7 @@ function renderSkillMatches(wrap, data, opts = {}) {
         <button class="btn ghost sm hidden" data-sm-only>只看勾选</button>
         <button class="btn ghost sm" data-sm-all>显示全部</button>
       </div>
-      <div class="sm-tip">点卡片看岗位详情和 JD 全文，左边的方框只负责勾选</div>
-      <div class="sm-list" data-sm-list></div>`;
+      <div class="sm-tip" data-sm-tip>点卡片看岗位详情和 JD 全文，左边的方框只负责勾选</div>      <div class="sm-list" data-sm-list></div>`;
 
     const slider = wrap.querySelector('[data-sm-slider]');
     slider.addEventListener('input', () => {
@@ -1354,6 +1737,22 @@ function renderSkillMatches(wrap, data, opts = {}) {
         return;
       }
 
+      const comp = e.target.closest('[data-company]');
+      if (comp && comp.dataset.company) {
+        e.stopPropagation();
+        openCompanyDialog(comp.dataset.company);
+        return;
+      }
+
+      const gre = e.target.closest('[data-greet]');
+      if (gre && gre.dataset.greet) {
+        e.stopPropagation();
+        const items = (wrap.__sm.data && wrap.__sm.data.items) || [];
+        const hitItem = items.find((x) => x.job && x.job.id === gre.dataset.greet);
+        openGreetingDialog((hitItem && hitItem.job) || { id: gre.dataset.greet });
+        return;
+      }
+
       const card = e.target.closest('[data-job]');
       if (!card || !card.dataset.job) return;
       const items = (wrap.__sm.data && wrap.__sm.data.items) || [];
@@ -1390,6 +1789,7 @@ function renderSkillMatches(wrap, data, opts = {}) {
     wrap.querySelector('[data-sm-pass]').textContent = String(passed.length);
     wrap.querySelector('[data-sm-best]').textContent =
       scored.length ? `${scored[0].score}%` : '—';
+
     allBtn.textContent = wrap.__sm.showAll ? '只看命中' : `显示全部 ${items.length} 条`;
     allBtn.classList.toggle('primary', wrap.__sm.showAll);
 
@@ -1807,6 +2207,7 @@ async function viewMatch(root) {
           <button class="btn ghost sm" id="job-refresh">刷新</button>
           <button class="btn ghost sm" id="run-deep" title="逐条调用大模型，慢且花钱，但能给出匹配亮点、差距点和打招呼语">深度分析</button>
           <button class="btn primary sm" id="run-match">技能匹配</button>
+          <button class="btn ghost sm" id="run-apply" title="给勾选的岗位逐条发招呼语（在内置浏览器里自动点「立即沟通」并发送）">一键投递</button>
         </div>
       </div>
       <div class="card-pad" id="job-picker"><div class="skeleton" style="height:120px"></div></div>
@@ -1971,6 +2372,18 @@ async function viewMatch(root) {
     const total = cbs.length;
     $('#sel-count').textContent = total ? `${state.selected.size} 个已选 / 共 ${total} 个` : '0 个已选';
     $$('.job-item', picker).forEach((n) => n.classList.toggle('selected', state.selected.has(n.dataset.id)));
+    syncApplyBtn();
+  }
+
+  /** 「一键投递」按钮跟着勾选数走：没勾就是灰的，勾了就把条数写在按钮上。 */
+  function syncApplyBtn() {
+    const btn = $('#run-apply');
+    if (!btn) return;
+    const n = state.selected.size;
+    btn.disabled = n === 0 || state.applying;
+    btn.textContent = state.applying
+      ? '投递中…'
+      : n ? `一键投递（${n}）` : '一键投递';
   }
 
   function renderJobs() {
@@ -1995,15 +2408,19 @@ async function viewMatch(root) {
     }
     // 卡片不再用 <label> 包住多选框：以前整张卡片都是 label，点哪儿都只会切换勾选，
     // 想看一眼 JD 正文根本没入口。现在多选框只管勾选，卡片主体点开详情。
-    picker.innerHTML = `<div class="job-grid">` + jobs.map((j) => `
-        <div class="job-item job-pick${state.selected.has(j.id) ? ' selected' : ''}" data-id="${esc(j.id)}" title="点击查看岗位详情">
+    picker.innerHTML = `<div class="job-grid">` + jobs.map((j) => {
+      const ap = state.applications[j.id];
+      const applied = ap && ap.status === 'sent';
+      return `
+        <div class="job-item job-pick${state.selected.has(j.id) ? ' selected' : ''}${applied ? ' applied' : ''}" data-id="${esc(j.id)}" title="点击查看岗位详情">
           <input type="checkbox" class="cb" data-cb="${esc(j.id)}" ${state.selected.has(j.id) ? 'checked' : ''} title="勾选 / 取消勾选" />
           <div class="jp-main">
-            <div class="t"><span class="nm">${esc(j.title)}</span><span class="src">${esc(sourceLabel(j.source))}</span></div>
+            <div class="t"><span class="nm">${esc(j.title)}</span><span class="src">${esc(sourceLabel(j.source))}</span>${applied ? '<span class="sm-applied" title="已经发过招呼语">已投</span>' : ''}</div>
             <div class="m">${esc(j.company || '未知公司')}${j.city ? ' · ' + esc(j.city) : ''}${j.experience_req ? ' · ' + esc(j.experience_req) : ''}</div>
             <div class="salary${j.salary ? '' : ' none'}">${esc(j.salary || '薪资未抓到')}</div>
           </div>
-        </div>`).join('') + '</div>';
+        </div>`;
+    }).join('') + '</div>';
     syncCount();
   }
 
@@ -2017,6 +2434,7 @@ async function viewMatch(root) {
       return;
     }
     state.jobs = jobs;
+    await loadApplications(); // 卡片上的「已投」标记要用
     if (selectAll) state.selected = new Set(jobs.map((j) => j.id));
     renderJobs();
   }
@@ -2269,6 +2687,8 @@ async function viewMatch(root) {
       progressEl.innerHTML = `<div class="card card-pad row between">
         <span style="font-size:12.5px">技能匹配：<b>${data.passed}</b> / ${data.total} 条达到 ${th}%，最高 <b>${data.best ?? '—'}%</b></span>
         <span class="small muted">拖阈值即时重筛，不用重新抓取</span></div>`;
+      state.matchResults = data.items || [];
+      await loadApplications(); // 卡片上的「已投」标记要用
       renderSkillMatches(resultsEl, data, { threshold: th });
       refreshStatus();
     } catch (e) {
@@ -2278,6 +2698,268 @@ async function viewMatch(root) {
   }
 
   runBtn.onclick = () => runSkillMatch();
+
+  /* ---------- 一键投递 ---------- */
+
+  const APPLY_INTERVAL = 30; // 秒。真人投简历就是这个节奏，设太小反而像机器
+
+  async function loadApplications() {
+    try {
+      state.applications = (await api('/applications')) || {};
+    } catch {
+      state.applications = {};
+    }
+    return state.applications;
+  }
+
+  function appliedInfo(jobId) {
+    const a = state.applications[jobId];
+    return a && a.status === 'sent' ? a : null;
+  }
+
+  async function recordApply(jobId, status, message, note) {
+    try {
+      await api('/apply/record', {
+        method: 'POST',
+        body: { job_id: jobId, status, message: message || '', note: note || '' },
+      });
+      if (status === 'sent') state.applications[jobId] = { status, applied_at: '刚刚' };
+    } catch {
+      /* 写库失败不该打断投递，日志里已经有一条成功记录了 */
+    }
+  }
+
+  /** 取这条岗位要发的话：逐条对标版，后端有缓存就秒回。 */
+  async function greetingFor(jobId) {
+    const d = await api('/greeting', { method: 'POST', body: { job_id: jobId } });
+    const vs = (d && d.variants) || [];
+    const pick = vs.find((v) => /对标/.test(v.label || '')) || vs[0];
+    const text = pick && pick.text ? String(pick.text).trim() : '';
+    if (!text) throw new Error((d && d.tip) || '没生成出招呼语');
+    return { text, noJd: !!d.no_jd };
+  }
+
+  async function runApply() {
+    if (state.applying) return;
+    const desktopApply = window.desktop && window.desktop.apply;
+    if (!desktopApply) {
+      toast('一键投递只能在桌面应用里用，浏览器预览没有内置浏览器', 'err');
+      return;
+    }
+
+    const ids = [...state.selected];
+    if (!ids.length) { toast('先勾选要投的岗位', 'warn'); return; }
+
+    await loadApplications();
+    const alreadyN = ids.filter((id) => appliedInfo(id)).length;
+    const fresh = ids.filter((id) => !appliedInfo(id));
+    const noUrl = fresh.filter((id) => {
+      const j = jobs.find((x) => x.id === id);
+      return !j || !j.url;
+    });
+    // 有链接但没抓到 JD 正文的：投递前先去原岗位页把正文补回来，补不到再发通用招呼语
+    const noJd = fresh.filter((id) => {
+      const j = jobs.find((x) => x.id === id);
+      return j && j.url && String(j.jd_text || '').trim().length < 20;
+    });
+    const targets = fresh.filter((id) => {
+      const j = jobs.find((x) => x.id === id);
+      return j && j.url;
+    });
+
+    if (!targets.length) {
+      const why = alreadyN
+        ? `这 ${alreadyN} 条都投过了`
+        : '勾选的岗位都没有原岗位链接';
+      toast(why, 'warn');
+      return;
+    }
+
+    const eta = Math.max(1, Math.round((targets.length * (APPLY_INTERVAL + 14)) / 60));
+    const source = curSource;
+
+    const { el, close } = openDialog({
+      title: '一键投递',
+      subtitle: '照着每条岗位的 JD 各写一句话，逐条发过去',
+      wide: true,
+      body: `
+        <div class="ap-facts">
+          <div><b>${targets.length}</b><span>条要投</span></div>
+          <div><b>${APPLY_INTERVAL}s</b><span>每条间隔</span></div>
+          <div><b>${eta}</b><span>分钟预计</span></div>
+        </div>
+        <div class="ap-notes">
+          <div>✓ 招呼语按每家 JD 现写（逐条对标版），不是群发给所有人同一句</div>
+          ${alreadyN ? `<div>· 已投过的 ${alreadyN} 条会跳过，不会重复发</div>` : ''}
+          ${noUrl.length ? `<div>· 没有原岗位链接的 ${noUrl.length} 条投不了，已跳过</div>` : ''}
+          ${noJd.length ? `<div>· 有 ${noJd.length} 条没抓到 JD 正文：会先去原岗位页补抓，补不到就发一条通用招呼语</div>` : ''}
+          <div>· 浏览器在后台自动点「立即沟通」并发送，中途别关那个窗口</div>
+          <div class="warn">撞到验证码会立刻停下、把窗口调到你面前；处理完再点一次就行，不会漏投</div>
+        </div>
+        <div id="ap-log" class="console hidden" style="margin-top:10px"></div>`,
+      footer: `<div class="left row" style="gap:8px">
+          <button class="btn ghost sm" data-close>取消</button>
+          <button class="btn primary sm" id="ap-start">开始投递</button>
+        </div>`,
+      onMount: (dlg, doClose) => {
+        const logEl = $('#ap-log', dlg);
+        const startBtn = $('#ap-start', dlg);
+        const t0 = Date.now();
+        let taskId = null;
+        let running = false;
+
+        const push = (level, msg) => {
+          logEl.classList.remove('hidden');
+          const div = document.createElement('div');
+          div.className = 'ln';
+          const tm = `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+          div.innerHTML = `<span class="tm">${tm}</span><span class="lv ${esc(level)}">${esc(String(level).toUpperCase())}</span><span class="tx">${esc(msg)}</span>`;
+          logEl.appendChild(div);
+          logEl.scrollTop = logEl.scrollHeight;
+        };
+
+        startBtn.onclick = async () => {
+          if (running) return;
+          running = true;
+          state.applying = true;
+          syncApplyBtn();
+          startBtn.disabled = true;
+          setBtn(startBtn, true, '投递中…');
+
+          // ---- 0. 没抓到 JD 正文的，先去原岗位页补抓一遍 ----
+          const spec = await loadScrapeSpec(source);
+          const noJdJobs = noJd.map((id) => jobs.find((x) => x.id === id)).filter(Boolean);
+          if (noJdJobs.length && builtinApi() && builtinApi().fetchJd) {
+            push('info', `${noJdJobs.length} 条没抓到 JD 正文，先去原岗位页补抓…`);
+            let back = null;
+            try {
+              back = await builtinApi().fetchJd({
+                source, spec, taskId: `jd-${Date.now()}`,
+                items: noJdJobs.map((j) => ({ job_id: j.id, url: j.url, title: j.title })),
+              });
+            } catch (e) {
+              push('error', `补抓 JD 出错：${e.message}，改发通用招呼语`);
+            }
+            const fetched = ((back && back.jobs) || []).filter((o) => o && o.ok);
+            if (fetched.length) {
+              // 回写后端，下次对着真实要求生成；本地 jobs 数组也同步，卡片「JD 字数」会跟着变
+              await api('/jobs/jd-backfill', { method: 'POST', body: { items: fetched } }).catch(() => {});
+              const byId = new Map(fetched.map((o) => [o.job_id, o]));
+              jobs.forEach((j) => {
+                const o = byId.get(j.id);
+                if (o && o.jd_text) {
+                  j.jd_text = o.jd_text;
+                  if (o.experience_req) j.experience_req = o.experience_req;
+                  if (o.education_req) j.education_req = o.education_req;
+                }
+              });
+              push('ok', `补到 ${fetched.length} 条正文，其余 ${noJdJobs.length - fetched.length} 条发通用招呼语`);
+            } else {
+              push('warn', `正文一条都没补到，${noJdJobs.length} 条全发通用招呼语`);
+            }
+          }
+
+          // ---- 1. 逐条把招呼语写出来 ----
+          const tasks = [];
+          for (let i = 0; i < targets.length; i += 1) {
+            const id = targets[i];
+            const job = jobs.find((x) => x.id === id) || { id };
+            push('info', `正在写第 ${i + 1}/${targets.length} 条：${job.title || id}`);
+            try {
+              const { text: msg, noJd: isGeneric } = await greetingFor(id);
+              tasks.push({
+                job_id: id, title: job.title, company: job.company,
+                url: job.url, message: msg,
+              });
+              push(isGeneric ? 'warn' : 'ok',
+                `${job.title || id} · ${msg.length} 字${isGeneric ? '（通用招呼语）' : ''}`);
+            } catch (e) {
+              push('error', `${job.title || id} · 招呼语没写出来（${e.message}）`);
+              await recordApply(id, 'failed', '', `生成招呼语失败：${e.message}`);
+            }
+          }
+
+          if (!tasks.length) {
+            push('error', '一条招呼语都没写出来，这次不投了');
+            running = false;
+            state.applying = false;
+            syncApplyBtn();
+            setBtn(startBtn, false);
+            startBtn.disabled = false;
+            return;
+          }
+
+          // ---- 2. 交给内置浏览器逐条点「立即沟通」并发送 ----
+          taskId = `apply-${Date.now()}`;
+          // 投递中把底部的「取消」换成真正的停止：关窗不会停任务，得显式告诉主进程
+          const stopBtn = dlg.querySelector('.dialog-foot [data-close]');
+          if (stopBtn) {
+            stopBtn.textContent = '停止投递';
+            stopBtn.classList.add('danger');
+            stopBtn.addEventListener('click', () => desktopApply.cancel(taskId));
+          }
+          const offLog = builtinApi().onLog((p) => {
+            if (p && p.taskId === taskId) push(p.level, p.msg);
+          });
+          const offRes = desktopApply.onResult(async (p) => {
+            if (!p || p.taskId !== taskId) return;
+            await recordApply(p.job_id, p.ok ? 'sent' : 'failed', p.message || '', p.note || '');
+          });
+
+          let out = null;
+          try {
+            out = await desktopApply.run({
+              source, spec, tasks, interval: APPLY_INTERVAL, taskId,
+            });
+          } catch (e) {
+            push('error', `投递出错：${e.message}`);
+          } finally {
+            offLog();
+            offRes();
+          }
+
+          running = false;
+          state.applying = false;
+          syncApplyBtn();
+
+          const sent = (out && out.sent) || 0;
+          const failed = (out && out.failed) || 0;
+          const err = out && out.error;
+
+          if (err) {
+            push('error', err);
+            setBtn(startBtn, false, '再试一次');
+            startBtn.disabled = false;
+            startBtn.onclick = () => { doClose(); setTimeout(runApply, 60); };
+            return;
+          }
+
+          push(sent ? 'ok' : 'warn', `结束：成功 ${sent} 条，失败 ${failed} 条`);
+          if (failed) push('warn', '失败的没记成已投，下次勾选会重新投');
+          setBtn(startBtn, false, '完成');
+          startBtn.disabled = true;
+
+          await loadApplications();
+          // 两处视图都刷一遍：候选岗位区的已投标记 + 匹配结果里的已投标记
+          setTimeout(async () => {
+            doClose();
+            await loadJobs();
+            if (state.matchResults && state.matchResults.length) runSkillMatch();
+          }, 900);
+        };
+      },
+    });
+
+    // 弹窗关掉时如果还在投，问一下要不要停
+    el.querySelectorAll('[data-close]').forEach((b) => {
+      b.addEventListener('click', () => {
+        if (state.applying) toast('投递还在跑，关掉弹窗不会停；要停请点窗口里的取消', 'warn');
+      });
+    });
+  }
+
+  $('#run-apply').onclick = () => runApply();
+  syncApplyBtn();
 
   $('#run-deep').onclick = async () => {
     if (!state.resume) {

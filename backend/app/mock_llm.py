@@ -32,6 +32,22 @@ class MockLLM:
                     "行业背景与该岗位略有差异",
                 ],
             }, ensure_ascii=False))
+        if '"variants"' in prompt:
+            return MockResp(json.dumps({
+                "variants": [
+                    {"style": "match", "label": "逐条对标版", "use": "技术硬门槛",
+                     "text": "8 年前端 + Agent 应用开发经验，在职做过 Agent Loop 与 MCP 工具执行链路，"
+                             "和你这条 JD 里的工具调用、记忆与上下文管理是同一块事。方便的话聊十分钟？"},
+                    {"style": "case", "label": "项目切入版", "use": "看重落地经验",
+                     "text": "做过企业级智能体的运行时模块，负责工具接入、敏感操作确认和上下文管理，"
+                             "MCP 工具层从 0 到 1 搭过一遍。这块和你的岗位要求基本重合，作品可以发您看看。"},
+                    {"style": "brief", "label": "极简版", "use": "海投试探",
+                     "text": "8 年经验，做过 Agent 运行时与 MCP 工具链路，和这个岗位方向一致，方便聊两句吗？"},
+                ],
+                "matched": ["熟悉 LangGraph 类 Agent 框架 → 用过 LangGraph.js 写多步工作流"],
+                "gaps": ["JD 要求精通 Python，我主力是 TypeScript"],
+                "tip": "演示模式，内容是假的",
+            }, ensure_ascii=False))
         if "打招呼语" in prompt:
             return MockResp(json.dumps({
                 "tailored_message": "您好，我有 3 年 LLM 应用经验，做过 RAG 问答系统（命中率 62%→88%）和 LangGraph Agent 工作流，也搭过 MCP 工具层，和贵岗位的 Agent/RAG 方向很契合，方便聊一下吗？",

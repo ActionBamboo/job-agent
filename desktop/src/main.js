@@ -419,11 +419,30 @@ ipcMain.handle('app:quit', () => { quitting = true; app.quit(); return true; });
 // ---------------------------------------------------------------- 内置浏览器（登录 / 抓取）
 // 招聘站会识别 Playwright 环境并把页面清成 about:blank，所以登录与抓取都放在
 // Electron 自己的 Chromium 里跑，每个平台一个持久化分区。
-const agent = new BrowserAgent(({ taskId, level, msg }) => {
-  if (win && !win.isDestroyed()) {
-    win.webContents.send('scrape:log', { taskId, level, msg, t: Date.now() });
+const agent = new BrowserAgent(
+  ({ taskId, level, msg }) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('scrape:log', { taskId, level, msg, t: Date.now() });
+    }
+  },
+  // 投递每完成一条就回报一次，前端立刻写库：中途出事也不会丢掉已投出去的记录
+  (payload) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('apply:result', { ...payload, t: Date.now() });
+    }
+  }
+);
+
+ipcMain.handle('apply:run', async (_e, payload = {}) => {
+  try {
+    const out = await agent.apply(payload);
+    return { ok: !out.error, ...out };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
   }
 });
+
+ipcMain.handle('apply:cancel', async (_e, { taskId } = {}) => agent.cancel(taskId));
 
 ipcMain.handle('scrape:check-login', async (_e, { source, hints }) => {
   try {
@@ -460,6 +479,16 @@ ipcMain.handle('scrape:run', async (_e, payload = {}) => {
 });
 
 ipcMain.handle('scrape:cancel', async (_e, { taskId } = {}) => agent.cancel(taskId));
+
+/** 补抓 JD 正文：投递前把「有链接但没正文」的岗位重新进一次详情页。 */
+ipcMain.handle('scrape:fetch-jd', async (_e, payload = {}) => {
+  try {
+    const out = await agent.fetchJd(payload);
+    return { ok: true, ...out };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+});
 
 /** 在内置浏览器里打开原岗位页（带该平台的登录态）。 */
 ipcMain.handle('scrape:open-url', async (_e, { source, url, title } = {}) => {

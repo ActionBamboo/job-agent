@@ -11,7 +11,8 @@ RESUME_PARSE_PROMPT = """你是简历解析助手。请从下面的简历文本�
   "experience": [{{"company": "公司", "role": "职位", "period": "起止时间", "achievements": ["成果1", "成果2"]}}],
   "education": [{{"school": "学校", "degree": "学历", "major": "专业", "period": "时间"}}],
   "summary": "一句话自我总结",
-  "target_role": "目标岗位"
+  "target_role": "目标岗位",
+  "expected_salary": 期望月薪(单位K的数字,如15;简历没写就填0)
 }}
 
 简历文本：

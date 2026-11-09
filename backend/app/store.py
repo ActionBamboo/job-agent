@@ -112,6 +112,55 @@ def stats() -> dict:
     return db.stats()
 
 
+# ---------------- 公司调研 ----------------
+
+def get_company_research(company: str, ttl_days: int | None = None) -> dict | None:
+    db.init_db()
+    if ttl_days is None:
+        return db.get_company_research(company)
+    return db.get_company_research(company, ttl_days)
+
+
+def save_company_research(company: str, data: dict) -> None:
+    db.init_db()
+    db.save_company_research(company, data)
+
+
+def list_company_research() -> list[dict]:
+    db.init_db()
+    return db.list_company_research()
+
+
+# ---------------- 打招呼语 ----------------
+
+def get_greeting(job_id: str, sig: str) -> dict | None:
+    db.init_db()
+    return db.get_greeting(job_id, sig)
+
+
+def save_greeting(job_id: str, sig: str, data: dict) -> None:
+    db.init_db()
+    db.save_greeting(job_id, sig, data)
+
+
+# ---------------- 投递记录 ----------------
+
+def get_application(job_id: str) -> dict | None:
+    db.init_db()
+    return db.get_application(job_id)
+
+
+def list_applications() -> dict[str, dict]:
+    db.init_db()
+    return db.list_applications()
+
+
+def save_application(job_id: str, status: str, greeting: str = "", note: str = "") -> None:
+    db.init_db()
+    db.save_application(job_id, status, greeting, note)
+
+
+
 # ---------------- 当前简历 ----------------
 
 def load_resume() -> dict | None:

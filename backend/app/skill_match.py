@@ -258,6 +258,9 @@ def resume_text_skill_keys(resume: dict | None) -> set[str]:
     return jd_skill_keys(" ".join(parts))
 
 
+from .salary import parse_expected, salary_hint
+
+
 def evaluate(skills: Iterable[str], job: dict, resume: dict | None = None) -> dict:
     """给一条岗位打技能匹配分。
 
@@ -291,6 +294,7 @@ def evaluate(skills: Iterable[str], job: dict, resume: dict | None = None) -> di
     elif not hard_keys:
         note = "JD 里没识别到技术技能词"
 
+    exp = parse_expected((resume or {}).get("expected_salary"))
     return {
         "job": {
             "id": job.get("id", ""),
@@ -313,4 +317,7 @@ def evaluate(skills: Iterable[str], job: dict, resume: dict | None = None) -> di
         "jd_skills": [_display(k) for k in sorted(hard_keys)],
         "jd_len": len(jd.strip()),
         "note": note,
+        # 只给提示，不参与打分和筛选：大环境不好时，低于期望的岗位也可能值得聊
+        "salary_hint": salary_hint(job.get("salary") or "", exp),
+        "expected_k": exp,
     }

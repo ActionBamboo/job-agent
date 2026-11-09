@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('desktop', {
     logout: (source) => ipcRenderer.invoke('scrape:logout', { source }),
     run: (payload) => ipcRenderer.invoke('scrape:run', payload),
     cancel: (taskId) => ipcRenderer.invoke('scrape:cancel', { taskId }),
+    /** 补抓 JD 正文：给一批有链接但没正文的岗位重新取一次详情 */
+    fetchJd: (payload) => ipcRenderer.invoke('scrape:fetch-jd', payload),
     /** 在内置浏览器（带登录态）里打开原岗位页，系统浏览器看不到内容时用它兜底 */
     openUrl: (payload) => ipcRenderer.invoke('scrape:open-url', payload),
     closeWindow: (source) => ipcRenderer.invoke('scrape:close-window', { source }),
@@ -46,6 +48,18 @@ contextBridge.exposeInMainWorld('desktop', {
       const handler = (_e, payload) => cb(payload);
       ipcRenderer.on('scrape:log', handler);
       return () => ipcRenderer.removeListener('scrape:log', handler);
+    },
+  },
+
+  /** 一键投递：在内置浏览器里逐条点「立即沟通」把招呼语发出去。 */
+  apply: {
+    run: (payload) => ipcRenderer.invoke('apply:run', payload),
+    cancel: (taskId) => ipcRenderer.invoke('apply:cancel', { taskId }),
+    /** 每投完一条回调一次（job_id / ok / note），前端据此立刻写库 */
+    onResult: (cb) => {
+      const handler = (_e, payload) => cb(payload);
+      ipcRenderer.on('apply:result', handler);
+      return () => ipcRenderer.removeListener('apply:result', handler);
     },
   },
 });
