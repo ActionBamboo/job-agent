@@ -1,0 +1,10 @@
+{
+  "name": "jobmatch-agent",
+  "productName": "JobMatch Agent",
+  "version": "1.0.0",
+  "description": "JobMatch Agent · 简历 × JD 智能匹配桌面应用",
+  "main": "src/main.js",
+  "author": "省长",
+  "license": "MIT",
+  "private": true
+}

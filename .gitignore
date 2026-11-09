@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.tmp/
+data/
+
+# 环境与密钥
+.env
+
+# 抓取产物
+scraped_jobs.json
+sample_data/scraped*.json
+
+# Node / 前端
+node_modules/
+.next/
+
+# 构建产物（重新 build 会再生成，可随时删除）
+build/
+desktop/data-dev.log
+
+# 数据库与运行时残留（jobmatch.db 里是真实简历和抓取结果，绝不能进仓库）
+*.db
+*.db-wal
+*.db-shm
+ck.db
+
+# 调试日志
+*.log
+desktop/debug.log
+
+# 临时调试截图（正式截图在 docs/screenshots）
+docs/shots-detail/
+
+# AI 工作记忆（含本机绝对路径）
+.workbuddy/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

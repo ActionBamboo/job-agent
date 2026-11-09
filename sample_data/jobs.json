@@ -1,0 +1,86 @@
+[
+  {
+    "id": "boss-001",
+    "title": "AI Agent 应用工程师（LLM 方向）",
+    "company": "某智能科技",
+    "city": "深圳",
+    "salary": "25-40K·14薪",
+    "experience_req": "3-5年",
+    "education_req": "本科及以上",
+    "source": "boss",
+    "url": "",
+    "jd_text": "岗位职责：\n1. 负责基于大语言模型（LLM）的智能体（Agent）应用的设计与开发，包括任务规划、工具调用、多轮对话；\n2. 构建 RAG 检索增强问答系统，优化召回与重排，提升回答准确率；\n3. 基于 LangChain / LangGraph 搭建多 Agent 工作流，支持复杂任务编排与人工审批；\n4. 将内部 API 封装为 MCP 工具，供大模型安全调用；\n5. 持续跟进 Prompt 工程、函数调用、模型微调等前沿技术。\n任职要求：\n1. 本科及以上，计算机相关专业，3 年以上后端或 AI 应用开发经验；\n2. 精通 Python，熟悉 FastAPI，有 LangChain / LangGraph / LlamaIndex 等框架实战经验；\n3. 熟悉 RAG、向量数据库（Chroma/Milvus）、Embedding 与重排；\n4. 了解 MCP 协议、函数调用、结构化输出；\n5. 具备良好的系统设计能力与工程化意识。"
+  },
+  {
+    "id": "boss-002",
+    "title": "大模型应用开发工程师（RAG/Agent）",
+    "company": "某云服务厂商",
+    "city": "北京",
+    "salary": "30-50K",
+    "experience_req": "3-5年",
+    "education_req": "本科及以上",
+    "source": "boss",
+    "url": "",
+    "jd_text": "岗位职责：\n1. 负责企业级大模型应用平台建设，落地 RAG、Agent、知识库问答等场景；\n2. 设计并实现工具调用（Function Calling）与插件体系；\n3. 优化检索链路（召回/排序/切分），提升端到端效果；\n4. 与算法团队协作，完成 Prompt 调优与效果评测。\n任职要求：\n1. 熟悉 Python 与主流 Web 框架；\n2. 有大模型应用落地经验，熟悉 LangChain、向量库、Embedding；\n3. 了解 Agent 编排与 MCP，有生产级系统设计经验；\n4. 熟悉 PostgreSQL、Redis，有高并发服务优化经验者优先。"
+  },
+  {
+    "id": "boss-003",
+    "title": "AI 产品经理（智能体/Agent）",
+    "company": "某互联网公司",
+    "city": "上海",
+    "salary": "25-45K",
+    "experience_req": "3-5年",
+    "education_req": "本科及以上",
+    "source": "boss",
+    "url": "",
+    "jd_text": "岗位职责：\n1. 负责 AI Agent 类产品的规划、需求分析与落地；\n2. 深入理解大模型能力边界，设计 Prompt、工作流与评测体系；\n3. 与技术团队协作，把用户需求转化为可执行的 Agent 能力；\n4. 跟踪行业趋势，持续打磨产品体验。\n任职要求：\n1. 3 年以上产品经验，有 AI/大模型相关产品经验优先；\n2. 理解 RAG、Agent、工具调用等概念；\n3. 逻辑清晰，具备跨团队推动能力；\n4. 有技术背景或能写简单脚本者优先。"
+  },
+  {
+    "id": "boss-004",
+    "title": "AI 应用工程师（NLP/LLM 落地方向）",
+    "company": "某金融科技",
+    "city": "杭州",
+    "salary": "22-35K",
+    "experience_req": "2-4年",
+    "education_req": "本科及以上",
+    "source": "boss",
+    "url": "",
+    "jd_text": "岗位职责：\n1. 负责客服、风控、投研等场景的大模型应用落地；\n2. 构建知识库问答与多轮对话系统；\n3. 负责 Prompt 工程、模型评测与效果优化；\n4. 编写高质量、可维护的后端服务。\n任职要求：\n1. 计算机相关专业，2 年以上后端开发经验；\n2. 熟悉 Python，了解 FastAPI；\n3. 有 RAG / Agent / LLM 应用开发经验优先；\n4. 了解向量数据库与 Embedding。"
+  },
+  {
+    "id": "boss-005",
+    "title": "LLM 应用开发工程师（RAG/知识库）",
+    "company": "某企业服务公司",
+    "city": "上海",
+    "salary": "28-45K·15薪",
+    "experience_req": "3-5年",
+    "education_req": "本科及以上",
+    "source": "boss",
+    "url": "",
+    "jd_text": "岗位职责：\n1. 负责企业知识库与检索增强（RAG）系统的设计与开发；\n2. 优化文档切分、向量召回与重排，提升问答准确率与召回率；\n3. 设计多路召回与融合排序策略；\n4. 与业务方协作，落地客服、运维等场景。\n任职要求：\n1. 熟悉 Python 与 FastAPI，3 年以上后端经验；\n2. 有 RAG/向量检索实战，熟悉 Chroma/Milvus/Elasticsearch；\n3. 了解 Embedding 与重排模型；\n4. 有 LangChain/LlamaIndex 经验优先。"
+  },
+  {
+    "id": "boss-006",
+    "title": "AI 智能体开发工程师（Agent/MCP）",
+    "company": "某大模型公司",
+    "city": "北京",
+    "salary": "35-60K",
+    "experience_req": "3-5年",
+    "education_req": "硕士及以上",
+    "source": "boss",
+    "url": "",
+    "jd_text": "岗位职责：\n1. 负责智能体（Agent）框架的设计与开发，支持多智能体协作与任务编排；\n2. 建设工具调用（Function Calling）与 MCP 协议生态；\n3. 设计智能体的记忆、规划与反思机制；\n4. 跟进前沿 Agent 技术并落地到产品。\n任职要求：\n1. 精通 Python，熟悉 LangGraph/AutoGen 等 Agent 框架；\n2. 深入理解 LLM 能力边界与 Prompt 工程；\n3. 有 MCP、函数调用、结构化输出实战经验；\n4. 有开源项目或 Agent 产品落地经验者优先。"
+  },
+  {
+    "id": "boss-007",
+    "title": "AI 应用后端工程师",
+    "company": "某出海 SaaS 公司",
+    "city": "广州",
+    "salary": "20-35K",
+    "experience_req": "2-4年",
+    "education_req": "本科及以上",
+    "source": "boss",
+    "url": "",
+    "jd_text": "岗位职责：\n1. 负责 AI 应用的后端服务开发与维护；\n2. 集成大模型 API，搭建稳定的调用与降级链路；\n3. 设计数据存储与接口，支撑产品快速迭代；\n4. 编写高质量、可测试的代码。\n任职要求：\n1. 熟悉 Python，2 年以上后端经验；\n2. 有大模型 API 集成经验，了解 RAG/Agent 概念；\n3. 熟悉 PostgreSQL、Redis、消息队列；\n4. 熟悉 Docker/K8s 者优先。"
+  }
+]

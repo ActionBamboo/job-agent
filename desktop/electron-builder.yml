@@ -1,0 +1,66 @@
+appId: cn.jobmatch.agent
+productName: JobMatch Agent
+copyright: Copyright © 2026 省长
+
+directories:
+  output: ../build/dist
+  buildResources: assets
+
+files:
+  - src/**/*
+  - package.json
+  - "!**/*.map"
+
+extraResources:
+  # 便携 Python 运行时（含全部依赖），由 scripts/build_python_runtime.py 生成
+  - from: ../build/python-runtime
+    to: python
+  # 前端静态资源（Electron 通过 app:// 协议读取，Python 也用它做 /ui）
+  - from: renderer
+    to: renderer
+    filter:
+      - "**/*"
+  - from: assets
+    to: assets
+  # 后端源码与样例数据（Python 直接读磁盘，不能放进 asar）
+  - from: ../backend
+    to: app-python/backend
+    filter:
+      - "**/*.py"
+      - "!**/__pycache__/**"
+      - "!**/*.pyc"
+  - from: ../sample_data
+    to: app-python/sample_data
+  # 首次启动即带好模型配置（内含你的 API Key，分享安装包前请先移除本项）
+  - from: ../.env
+    to: app-python/.env
+
+asar: true
+compression: normal
+removePackageScripts: true
+
+# 直接复用 node_modules 里已下载好的 Electron，避免重复下载 115MB
+electronDist: node_modules/electron/dist
+
+win:
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: JobMatch-Agent-Setup-${version}.${ext}
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: JobMatch Agent
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+  installerHeaderIcon: assets/icon.ico
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true

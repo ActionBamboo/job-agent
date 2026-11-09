@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>JobMatch Agent · 启动中</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 50% -10%, #eef0ff 0%, #f4f5f9 55%, #f4f5f9 100%);
+      color: #1a1f2b;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-user-select: none; user-select: none;
+      -webkit-app-region: drag;
+    }
+    .wrap { width: 460px; padding: 0 26px; text-align: center; }
+    .logo {
+      width: 62px; height: 62px; border-radius: 18px; margin: 0 auto 16px;
+      box-shadow: 0 14px 30px -14px rgba(99, 102, 241, .85);
+      display: block;
+    }
+    h1 { font-size: 17px; margin: 0 0 4px; letter-spacing: .3px; }
+    .sub { font-size: 12px; color: #8d94a8; margin-bottom: 26px; }
+    .bar { height: 4px; border-radius: 4px; background: #e6e8f2; overflow: hidden; }
+    .bar > i {
+      display: block; height: 100%; width: 34%; border-radius: 4px;
+      background: linear-gradient(90deg, #6366f1, #a78bfa);
+      animation: run 1.25s cubic-bezier(.5, 0, .5, 1) infinite;
+    }
+    @keyframes run { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
+    .status { font-size: 12.5px; color: #5b6376; margin-top: 14px; min-height: 18px; }
+    .log {
+      margin-top: 18px; height: 96px; overflow: hidden;
+      font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; line-height: 1.8;
+      color: #9aa1b5; text-align: left;
+    }
+    .log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .err {
+      display: none; margin-top: 18px; padding: 14px 16px; text-align: left;
+      background: #fff; border: 1px solid #f0cfcd; border-radius: 12px;
+    }
+    .err.show { display: block; }
+    .err h3 { margin: 0 0 6px; font-size: 13px; color: #c53030; }
+    .err p { margin: 0; font-size: 12px; color: #5b6376; line-height: 1.75; word-break: break-word; }
+    .btns { margin-top: 14px; display: flex; gap: 8px; }
+    button {
+      flex: 1; height: 32px; border-radius: 8px; font-size: 12.5px; cursor: pointer;
+      border: 1px solid #d8dbe8; background: #fff; color: #1a1f2b;
+      font-family: inherit; -webkit-app-region: no-drag;
+    }
+    button.primary { background: linear-gradient(140deg, #5b53ea, #6d4ae0); border-color: #5346d6; color: #fff; }
+    button:hover { filter: brightness(.98); }
+    .tip { margin-top: 22px; font-size: 11px; color: #b3b9ca; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <img class="logo" src="icon.png" alt="" />
+    <h1>JobMatch Agent</h1>
+    <div class="sub">简历 × JD 智能匹配</div>
+
+    <div class="bar" id="bar"><i></i></div>
+    <div class="status" id="status">正在启动本地服务…</div>
+
+    <div class="log" id="log"></div>
+
+    <div class="err" id="err">
+      <h3>启动失败</h3>
+      <p id="err-msg"></p>
+      <div class="btns">
+        <button class="primary" id="btn-retry">重试</button>
+        <button id="btn-logs">打开日志</button>
+        <button id="btn-quit">退出</button>
+      </div>
+    </div>
+
+    <div class="tip" id="tip">首次启动需要加载模型依赖，大约 5-15 秒</div>
+  </div>
+  <script src="loading.js"></script>
+</body>
+</html>
